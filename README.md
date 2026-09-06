@@ -30,7 +30,7 @@ curl: (56) CONNECT tunnel failed, response 403
 
 Everything else is done and tested: the workflow graph, the pagination loop, the
 per-company ЕМБС dedupe, the rate limiting, the error routing and the Sheets
-mapping are covered by **99 passing tests**. What is *unverified* is whether the
+mapping are covered by **103 passing tests**. What is *unverified* is whether the
 label matching finds the real markup, and whether ScrapingBee needs the premium
 proxy here.
 
@@ -52,7 +52,7 @@ list of assumptions and exactly where to adjust each one.
 ### 1. Step 0 — verify against the live site
 
 ```bash
-npm test                                  # 99 tests, no dependencies to install
+npm test                                  # 103 tests, no dependencies to install
 
 SCRAPINGBEE_API_KEY=xxxxx npm run probe   # 2 real calls, ~10s, 2 credits
 ```
@@ -218,6 +218,13 @@ all — never decoded, re-encoded or reconstructed from the company name).
 **Pass 2 — profile pages.** One request per company. All 12 fields come from the
 *Резиме* tab.
 
+**Required vs optional fields.** Only a missing *required* field routes a
+company to the `Errors` tab. Contact details (phone, e-mail, owners, managers)
+and the employee count are optional: many real companies list none of them, so
+flagging them would send nearly every company down the error branch and bury the
+real problems. They show up as empty cells in `Leads`, which is where you would
+filter on them anyway.
+
 **Row shaping.** `Build Sheet Row` emits exactly the 14 columns and nothing
 else. That node exists on purpose: with `autoMapInputData`, a key that has no
 matching header is *not* quietly ignored — n8n either adds a column to your
@@ -274,8 +281,9 @@ queue.
 | Search page challenge / truncated | Treated as a **failure**, never as "no more results", so the run cannot end early and silently. |
 | Profile fetch fails or is blocked | Row → `Errors` (`Written To Main Sheet = no`). Loop continues. |
 | Profile parses but ЕМБС is missing | Row → `Errors`. Not written to `Leads`, because it could not be de-duplicated. |
-| Profile parses, some fields blank | Row → `Leads` **and** a note row → `Errors`. |
-| `Number of Employees` not found | Blank cell. Never an error — the brief marks it optional. |
+| Profile parses, a **required** field blank | Row → `Leads` **and** a note row → `Errors`. Required = Company Name, EDB, EMBS, Date Founded, NKD Code, Revenue, Profit/Loss. |
+| Profile parses, an **optional** field blank | Blank cell, no Errors row. Optional = Phone Numbers, Emails, Owners, Managers, Number of Employees — real companies routinely list none of these, and you can filter on the empty cells in the sheet. |
+| Nothing at all could be extracted | Row → `Errors` with "nothing could be extracted … run `npm run probe`". Never written to `Leads` as a blank row. |
 | Google Sheets append fails | Retried 3× with backoff, then routed to `Errors` with the real API message, and the run continues. If the whole spreadsheet is unreachable the `Errors` append fails too — `Run Summary.diagnosis` is then the only record, and it names the likely cause. |
 | Google Sheets **lookup** fails | The lead is written anyway (better than losing it) and the duplicate risk is logged to `Run Summary`. |
 
@@ -293,7 +301,7 @@ src/nodes/*.js              ← One file per n8n Code node.
 build/build-workflow.js     ← Inlines parsers.js into each Code node, emits the JSON.
 build/validate-workflow.js  ← Structural + policy checks on the generated workflow.
 scripts/step0-probe.js      ← Step 0 live verification.
-test/                       ← 99 tests (parsers + end-to-end node simulation).
+test/                       ← 103 tests (parsers + end-to-end node simulation).
 workflow/                   ← The importable n8n workflow (generated, committed).
 docs/                       ← Every extraction assumption, and where to change it.
 ```
@@ -311,12 +319,12 @@ overwrites them. The loop is: edit `src/parsers.js` → `npm run probe` →
 npm test
 ```
 
-- `test/parsers.test.js` (54) — MKD number formats (`128.450.900,00`, losses,
+- `test/parsers.test.js` (56) — MKD number formats (`128.450.900,00`, losses,
   parenthesised losses), percent-encoded href handling, end-of-pagination
   signals, challenge-vs-empty-page classification, every profile field, the
   descending-year financial table, the no-`<table>` fallback, and the sheet row
   shape.
-- `test/workflow-sim.test.js` (45) — executes the **generated** Code nodes with
+- `test/workflow-sim.test.js` (47) — executes the **generated** Code nodes with
   mocked n8n globals: the real pagination loop (termination, repeat detection,
   403/429, caps), the per-company ЕМБС dedupe, error routing, and a full
   search → profile → dedupe → sheet run.

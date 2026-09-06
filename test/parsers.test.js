@@ -298,11 +298,26 @@ t('a loss in the latest year is kept, negative, and never dropped', () => {
 
 /* ---- degraded profiles ---- */
 
-t('a missing КОНТАКТИ section is reported, not thrown', () => {
+t('a missing КОНТАКТИ section leaves blanks, not required-field failures', () => {
+  // Real companies routinely list no phone, e-mail, owner or manager. Treating
+  // those as failures routes almost every company to the Errors tab.
   const p = P.parseProfile(F.profilePage({ contacts: '' }));
-  ok(p.missing.includes('Phone Numbers'), 'phones reported missing');
-  ok(p.missing.includes('Owners'), 'owners reported missing');
+  eq(p.missing, [], 'no REQUIRED field is missing');
+  ok(p.blank.includes('Phone Numbers'), 'recorded as an optional blank');
+  ok(p.blank.includes('Emails'));
+  ok(p.blank.includes('Owners'));
+  ok(p.blank.includes('Managers'));
   eq(p.embs, '6543210', 'the rest of the page still parses');
+  eq(p.looksUnparsed, false, 'the page did parse — it just has no contacts');
+});
+
+t('a page the rules cannot read at all is flagged as unparsed', () => {
+  const p = P.parseProfile(F.page('<main><div class="x">something else entirely</div></main>'));
+  eq(p.looksUnparsed, true, 'distinguishable from a merely sparse profile');
+});
+
+t('a normal profile is never flagged as unparsed', () => {
+  eq(P.parseProfile(F.profilePage()).looksUnparsed, false);
 });
 
 t('a missing financial table leaves the figures blank without failing', () => {

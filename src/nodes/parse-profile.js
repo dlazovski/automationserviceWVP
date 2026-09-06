@@ -75,6 +75,14 @@ if (blocking.length) {
 const p = parseProfile(body);
 run.profilesFetched = (run.profilesFetched || 0) + 1;
 
+// Nothing at all was extracted. That is not a partial row — the label rules do
+// not match this site's markup, and writing a blank row would bury the fact.
+if (p.looksUnparsed) {
+  return fail('nothing could be extracted from this page — the label rules do not match ' +
+    'the live markup. Run `SCRAPINGBEE_API_KEY=... npm run probe` in the repo: it saves the ' +
+    'raw HTML to tmp/ and reports which rule to fix.');
+}
+
 // ЕМБС is the deduplication key. Without it the per-company duplicate check
 // cannot run, so the row goes to the "Errors" tab instead of the main sheet
 // rather than risking a duplicate.
@@ -85,9 +93,18 @@ if (!p.embs) {
 
 const row = buildSheetRow(p, profileUrl, scrapedAt);
 
-// "Number of Employees" is optional by the brief: blank, never an error.
-const missing = p.missing.filter((m) => m !== 'Number of Employees');
+/*
+ * Only REQUIRED fields route a company to the Errors tab.
+ *
+ * `p.blank` holds the optional ones — phone, e-mail, owners, managers,
+ * employees. Companies legitimately list none of those, so treating them as
+ * failures sent almost every company down the error branch and buried the real
+ * problems. They are visible as empty cells in the sheet, which is where you
+ * would filter on them anyway.
+ */
+const missing = p.missing;
 if (missing.length) run.rowsWithMissingFields = (run.rowsWithMissingFields || 0) + 1;
+if ((p.blank || []).length) run.rowsWithBlankContacts = (run.rowsWithBlankContacts || 0) + 1;
 
 return [{
   json: Object.assign({}, row, {
@@ -97,6 +114,7 @@ return [{
     profileUrl: profileUrl,
     error: '',
     missing: missing,
+    blank: p.blank || [],
     hasMissing: missing.length > 0,
     parseNotes: p.notes,
     financialYears: p.financialYears,

@@ -42,7 +42,11 @@ return [{
     name: profile.name || profile['Company Name'] || '',
     profileUrl: profile.profileUrl || '',
     error: error,
-    missing: profile.missing || [],
+    // Required misses first; optional blanks appended as context, marked so
+    // they are not mistaken for extraction failures.
+    missing: (profile.missing || []).concat(
+      (profile.blank || []).map((f) => f + ' (optional, blank)')
+    ),
     written: written,
     scrapedAt: profile.scrapedAt || new Date().toISOString(),
   }),

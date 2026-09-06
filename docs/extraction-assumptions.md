@@ -84,6 +84,20 @@ all match.
 | **(k) Revenue** | row `Вкупен приход`, latest year column | see below | `REVENUE_LABEL_RE` |
 | **(l) Employees** | row `Просечен број на вработени`, latest year column | a labelled line anywhere on the page. **Optional** — blank, never an error | `EMPLOYEES_LABEL_RE` |
 
+### Required vs optional
+
+Only these route a company to the `Errors` tab when absent: **Company Name,
+EDB, EMBS, Date Founded, NKD Code, Revenue, Profit/Loss**.
+
+**Phone Numbers, Emails, Owners, Managers and Number of Employees are
+optional** — blank cells, never errors. Real companies routinely list none of
+them; treating them as failures sends nearly every company down the error branch
+and buries the genuine extraction problems.
+
+If a page yields *none* of the required fields, `looksUnparsed` fires and the
+company becomes a loud `Errors` row naming `npm run probe`, rather than a blank
+row in `Leads`.
+
 ### Why contact fallbacks are scoped to the КОНТАКТИ block
 
 `tel:` and `mailto:` hrefs are collected **only from within the КОНТАКТИ
@@ -158,7 +172,7 @@ so it must match row 1 of your sheet character for character.
    working.
 4. `npm run probe` again until clean.
 5. `npm run verify` — rebuilds the workflow JSON, re-runs the structural checks
-   and all 99 tests.
+   and all 103 tests.
 6. Re-import `workflow/companywall-mk-grant-leads.json` into n8n.
 
 Never edit the extraction rules inside the workflow JSON: each of the 9 Code

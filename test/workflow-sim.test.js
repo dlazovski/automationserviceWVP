@@ -359,12 +359,34 @@ t('a profile with no EMBS goes to Errors rather than risking a duplicate', () =>
   ok(out.error.includes('cannot deduplicate'), 'explains why it was not written');
 });
 
-t('a profile missing optional fields is still written, and flagged', () => {
+t('a company with no contact details is written WITHOUT an Errors row', () => {
+  // The bug this replaces: phones/emails/owners/managers counted as required,
+  // so nearly every real company tripped the error branch.
   const out = run('Parse Profile', profileState(httpOk(F.profilePage({ contacts: '' }))))[0];
   eq(out.ok, true, 'still a usable lead');
-  eq(out.hasMissing, true, 'flagged for the Errors tab');
-  ok(out.missing.includes('Phone Numbers'));
+  eq(out.hasMissing, false, 'NOT routed to the Errors tab');
+  eq(out.missing, [], 'no required field is missing');
+  ok(out.blank.includes('Phone Numbers'), 'recorded as an optional blank');
   eq(out['EMBS'], '6543210');
+  eq(out['Phone Numbers'], '', 'the cell is simply empty');
+});
+
+t('a genuinely missing REQUIRED field still routes to the Errors tab', () => {
+  const noNkd = F.profilePage({
+    basic: '<aside><h2>ОСНОВНИ ИНФОРМАЦИИ</h2><div><span>ЕМБС</span><span>6543210</span></div></aside>',
+  });
+  const out = run('Parse Profile', profileState(httpOk(noNkd)))[0];
+  eq(out.ok, true, 'the lead is still written');
+  eq(out.hasMissing, true, 'but flagged');
+  ok(out.missing.includes('NKD Code'));
+});
+
+t('a page the rules cannot read is a loud failure, not a blank row', () => {
+  const junk = F.page('<main><div>totally different markup</div></main>');
+  const out = run('Parse Profile', profileState(httpOk(junk)))[0];
+  eq(out.ok, false, 'never written as an empty row');
+  ok(out.error.includes('nothing could be extracted'), `error text: ${out.error}`);
+  ok(out.error.includes('npm run probe'), 'points at the tool that diagnoses it');
 });
 
 t('a blank employee count alone never counts as missing', () => {

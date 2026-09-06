@@ -819,19 +819,35 @@ function parseProfile(html) {
   var L = htmlToLines(raw);
   var text = L.join('\n');
   var tables = parseHtmlTables(raw);
+  /*
+   * `missing`  — REQUIRED fields. Every profile should have these; an absence
+   *              means the extraction rule did not match and needs a look.
+   * `blank`    — OPTIONAL fields. Plenty of real companies list no phone, no
+   *              e-mail, no owner and no manager. Those are blank cells, not
+   *              failures: flagging them would route nearly every company to
+   *              the Errors tab and drown the real problems.
+   */
   var missing = [];
+  var blank = [];
   var notes = [];
 
   /* --- (a) Company name: the page heading ---------------------------- */
   var name = '';
   var h1 = raw.match(/<h1[^>]*>([\s\S]{1,400}?)<\/h1>/i);
   if (h1) name = stripTags(h1[1]);
+  var nameFromTitle = false;
   if (!name) {
-    // Site titles are "NAME | CompanyWall" — keep the leading segment.
+    // Site titles are "NAME | CompanyWall" — keep the leading segment. Reject
+    // the site's own name: on a page the rules cannot read, the bare title
+    // would otherwise be written into the sheet as the company name.
     var t = raw.match(/<title[^>]*>([\s\S]{1,300}?)<\/title>/i);
     if (t) {
-      name = stripTags(t[1]).split(/\s*[|\u2013\u2014]\s*/)[0].trim();
-      if (name) notes.push('name:from-title');
+      var candidate = stripTags(t[1]).split(/\s*[|\u2013\u2014]\s*/)[0].trim();
+      if (candidate && !/^companywall/i.test(candidate) && candidate.length > 2) {
+        name = candidate;
+        nameFromTitle = true;
+        notes.push('name:from-title');
+      }
     }
   }
   if (!name) missing.push('Company Name');
@@ -891,7 +907,7 @@ function parseProfile(html) {
     phones = uniqBy(telHrefs.map(cleanPhone).filter(isPhone), phoneKey);
     if (phones.length) notes.push('phones:from-tel-href');
   }
-  if (!phones.length) missing.push('Phone Numbers');
+  if (!phones.length) blank.push('Phone Numbers');
 
   var mailBlock = valuesUnderLabel(
     CL,
@@ -922,7 +938,7 @@ function parseProfile(html) {
       function (e) { return e.toLowerCase(); });
     if (emails.length) notes.push('email:blind-scan');
   }
-  if (!emails.length) missing.push('Emails');
+  if (!emails.length) blank.push('Emails');
 
   /* --- (g)(h) Сопственик / Управител --------------------------------- *
    * Both labels repeat once per person. Every occurrence is collected and the
@@ -940,8 +956,8 @@ function parseProfile(html) {
       .filter(function (s) { return s.length > 1 && !isPersonLabel(s); }),
     function (s) { return norm(s); }
   );
-  if (!owners.length) missing.push('Owners');
-  if (!managers.length) missing.push('Managers');
+  if (!owners.length) blank.push('Owners');
+  if (!managers.length) blank.push('Managers');
 
   /* --- (i) НКЗ: numeric code only ------------------------------------ *
    * The field reads "46.710 - Трговија на големо со моторни возила"; only the
@@ -1002,6 +1018,20 @@ function parseProfile(html) {
     employees: employeesValue,
     financialYears: (profit.years || revenue.years || []),
     missing: missing,
+    blank: blank,
+    /*
+     * True when essentially nothing was extracted. That is not a "partial row"
+     * — it means the label rules do not match this site's markup at all, and a
+     * blank row in the sheet would hide it. The caller turns this into a loud
+     * Errors row pointing at `npm run probe`.
+     */
+    /*
+     * A title-derived name does not count as evidence the page parsed: the
+     * <title> is present on every page including ones the rules cannot read.
+     * Only a real heading or an extracted identifier/figure counts.
+     */
+    looksUnparsed: (!name || nameFromTitle) && !edb && !embs &&
+      !nkdCode && !profit.found && !revenue.found,
     notes: notes,
     flags: diagnoseResponse(raw, 'profile')
   };

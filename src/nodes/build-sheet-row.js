@@ -17,6 +17,7 @@ const run = staticData.cwGrantRun || (staticData.cwGrantRun = { errors: [] });
 // Counts rows handed to the append node. "Build Error Row" decrements this if
 // the append comes back with an error, so the summary stays truthful.
 run.rowsWritten = (run.rowsWritten || 0) + 1;
+run.rowsSentToSheet = (run.rowsSentToSheet || 0) + 1; // never decremented
 
 const row = {};
 for (const key of SHEET_HEADERS) {
