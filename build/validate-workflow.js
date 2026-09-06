@@ -200,10 +200,58 @@ check(searchUrl.includes('dsm[0].To=4000000000') && searchUrl.includes('dsm[1].C
   'Config.searchUrl must keep the brief\'s filter parameters unchanged');
 check(!/[?&]p=\d/.test(searchUrl), 'Config.searchUrl must not carry a &p= page parameter — pagination appends it');
 
-// The pagination builder must only ever APPEND &p=, never rebuild the filter.
+/*
+ * The URL builder may do exactly two things to the configured URL: set the
+ * current revenue band, and append "&p=N". It must never reconstruct the
+ * filter from parts.
+ */
 const urlBuilder = byName.get('Build Search URL');
-check(urlBuilder && urlBuilder.parameters.jsCode.includes('buildSearchUrl(cfg.searchUrl, page)'),
-  'Build Search URL must pass Config.searchUrl through buildSearchUrl unchanged');
+check(urlBuilder && urlBuilder.parameters.jsCode.includes('withRevenueBand(cfg.searchUrl, band.from, band.to)'),
+  'Build Search URL must derive its URL from Config.searchUrl via withRevenueBand');
+check(urlBuilder && urlBuilder.parameters.jsCode.includes('buildSearchUrl(bandUrl, page)'),
+  'Build Search URL must append pagination via buildSearchUrl');
+
+// The seed band must be READ from the configured URL, never hardcoded — that is
+// what keeps the campaign's revenue floor authoritative.
+const initRun = byName.get('Init Run');
+check(initRun && /readRevenueBand\(searchUrl\)/.test(initRun.parameters.jsCode),
+  'Init Run must read the seed revenue band out of Config.searchUrl, not hardcode one');
+// (No "must not contain 4000000" check here: every Code node carries an inlined
+// copy of parsers.js, which legitimately holds the campaign URL as a default.)
+
+/*
+ * Subdivision must PARTITION the band, never widen it. Verified functionally
+ * here so a future edit to splitBand cannot silently start emitting a half that
+ * reaches below the campaign floor.
+ */
+{
+  const P = require('../src/parsers');
+  const seed = P.readRevenueBand(searchUrl);
+  check(seed && seed.from === 4000000, 'the seed band must start at the campaign floor');
+
+  let bands = [seed];
+  for (let depth = 0; depth < 8; depth++) {
+    const next = [];
+    for (const b of bands) {
+      const halves = P.splitBand(b.from, b.to);
+      if (!halves) continue;
+      check(halves[0].from === b.from && halves[1].to === b.to,
+        `splitBand(${b.from},${b.to}) must cover the original range exactly`);
+      check(halves[1].from === halves[0].to + 1,
+        `splitBand(${b.from},${b.to}) must leave no gap and no overlap`);
+      check(halves[0].from >= seed.from && halves[1].from >= seed.from,
+        `splitBand(${b.from},${b.to}) must never reach below the campaign floor`);
+      next.push(halves[0], halves[1]);
+    }
+    bands = next.slice(0, 64);
+    if (!bands.length) break;
+  }
+
+  // And the rewrite must touch nothing but the two revenue parameters.
+  const mask = (u) => u.replace(/dsm\[0\]\.(From|To)=\d+/g, 'X');
+  check(mask(P.withRevenueBand(searchUrl, 123, 456)) === mask(searchUrl),
+    'withRevenueBand must leave every other query parameter byte-identical');
+}
 
 /* ---- no profit/loss filtering anywhere ---- */
 

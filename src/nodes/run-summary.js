@@ -22,6 +22,21 @@ const sheetsErrors = (run.errors || []).filter((e) => String(e).indexOf('[sheets
   String(e).indexOf('[dedupe]') === 0);
 
 let diagnosis = '';
+
+/*
+ * A band that could not be subdivided below the ceiling means results in that
+ * revenue range are unreachable through this search. Say so loudly: the run
+ * otherwise looks like a clean success while quietly missing companies.
+ */
+const unsplittable = (run.bands || []).filter((b) => b.found >= 60 && !b.split);
+if (unsplittable.length) {
+  diagnosis = unsplittable.length + ' revenue band(s) came back at the site\'s ~60-result ' +
+    'ceiling and could not be split further: ' +
+    unsplittable.map((b) => b.band).join(', ') +
+    '. Companies in those ranges may be missing. Raise Config.maxBands, or narrow ' +
+    'Config.searchUrl (for example by NKD code) and run once per slice.';
+}
+
 if ((run.profilesFetched || 0) > 0 && (run.rowsWritten || 0) === 0) {
   if (sheetsErrors.length) {
     diagnosis = 'Profiles were scraped but NO rows reached the sheet, and Google Sheets ' +
@@ -48,6 +63,11 @@ return [{
     durationSeconds: durationSec,
     searchUrl: run.searchUrl || '',
     searchPagesFetched: run.searchPagesFetched || 0,
+    seedBand: run.seedBand || '',
+    bandsSearched: run.bandsSearched || 0,
+    bandsSplit: run.bandsSplit || 0,
+    bandsAtCeiling: run.bandsAtCeiling || 0,
+    bands: run.bands || [],
     paginationStopReason: run.paginationStopReason || '',
     profileUrlsFound: run.profileUrlsFound || 0,
     profilesFetched: run.profilesFetched || 0,

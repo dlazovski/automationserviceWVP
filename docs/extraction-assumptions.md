@@ -37,7 +37,36 @@ variants and every one has a fallback.
 | 5 | A company may be linked more than once per row (logo + title). Links are de-duplicated by path across the whole page | `findProfileAnchors()` | if the probe reports roughly twice the expected number of companies, this is why |
 | 6 | The href is used **exactly as it appears** in the raw HTML — percent-encoded Cyrillic slug preserved byte for byte, only `&amp;` un-escaped | `findProfileAnchors()` | the probe prints the first 5 URLs; they should look like the brief's example |
 
-### End of pagination
+### The ~60-result ceiling — why one search is never enough
+
+CompanyWall serves **at most ~60 results per search however deep you page**.
+This is confirmed twice over: a live run of this workflow returned exactly 60,
+and the sister CompanyWall workflow documents the same finding ("a live run
+capped out at 60 companies for a whole region").
+
+It is not a pagination bug and no amount of `&p=N` fixes it. The crawl therefore
+subdivides by **revenue band**:
+
+| Step | Behaviour | Where |
+|---|---|---|
+| Seed | The first band is read out of `Config.searchUrl` (`dsm[0].From` / `dsm[0].To`) — never invented | `readRevenueBand()`, `src/nodes/init-run.js` |
+| Request | Only those two parameters are rewritten; everything else is byte-identical | `withRevenueBand()` |
+| Detect | A band returning `>= resultCeiling` (60) is assumed truncated, not exhausted — there is no way to tell "exactly 60 matches" from "60 shown of 400" | `src/nodes/parse-search-results.js` |
+| Split | Bisect into `[from, mid]` and `[mid+1, to]` — adjacent, non-overlapping, together exactly the original | `splitBand()` |
+| Repeat | Depth-first, until every band comes back short | queue in the loop state |
+| Give up | A band at the ceiling too narrow to split is reported in `Run Summary.diagnosis` — the run never pretends to be complete | `src/nodes/run-summary.js` |
+
+Because the bands partition the seed range exactly, the union is provably the
+same set the single search asked for, and every request still carries
+`dsm[0].From >= 4000000`. `build/validate-workflow.js` checks those invariants
+functionally, and a test drives the whole crawl against a mock site that
+enforces the cap: 470 of 470 recovered, versus 60 with subdivision off.
+
+**If a band still cannot get under the ceiling** (60+ companies on an identical
+revenue figure), narrow `Config.searchUrl` on another axis — NKD code via `at=`,
+or town via `c=`, as the sister workflow does — and run once per slice.
+
+### End of a band
 
 Three independent signals, **any** of which stops the crawl. The exact "no more
 results" markup is unknown, so no single one is trusted:
@@ -199,7 +228,7 @@ so it must match row 1 of your sheet character for character.
    working.
 4. `npm run probe` again until clean.
 5. `npm run verify` — rebuilds the workflow JSON, re-runs the structural checks
-   and all 108 tests.
+   and all 120 tests.
 6. Re-import `workflow/companywall-mk-grant-leads.json` into n8n.
 
 Never edit the extraction rules inside the workflow JSON: each of the 9 Code

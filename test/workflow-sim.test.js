@@ -83,6 +83,7 @@ function run(nodeName, state) {
 
 /** A ScrapingBee HTTP node response, as the Code nodes receive it. */
 const httpOk = (body) => ({ statusCode: 200, body });
+const manyUrls = (n) => Array.from({ length: n }, (_, i) => `https://www.companywall.com.mk/kompanija/x-${i}/MMA8dAg${i}`);
 const httpErr = (statusCode) => ({ statusCode, body: '' });
 
 const CONFIG = {
@@ -134,18 +135,38 @@ t('Init Run refuses a searchUrl that is not the CompanyWall search page', () => 
  * Build Search URL
  * ------------------------------------------------------------------ */
 
-t('Build Search URL leaves page 1 unpaginated and appends &p= after that', () => {
-  const st = newState({ input: { page: 1, collected: [], errors: [] } });
-  eq(run('Build Search URL', st)[0].targetUrl, P.DEFAULT_SEARCH_URL);
+const SEED_BAND = { from: 4000000, to: 4000000000 };
 
-  st.input = { page: 4, collected: ['a'], errors: [] };
+t('Build Search URL leaves page 1 unpaginated and appends &p= after that', () => {
+  const st = newState({ input: { band: SEED_BAND, page: 1, collected: [], errors: [] } });
+  eq(run('Build Search URL', st)[0].targetUrl, P.DEFAULT_SEARCH_URL,
+    'the seed band reproduces the configured URL exactly');
+
+  st.input = { band: SEED_BAND, page: 4, collected: ['a'], errors: [] };
   const out = run('Build Search URL', st)[0];
   eq(out.targetUrl, P.DEFAULT_SEARCH_URL + '&p=4');
   eq(out.collected, ['a'], 'accumulated URLs carried forward');
 });
 
+t('a narrowed band rewrites ONLY the two revenue parameters', () => {
+  const st = newState({ input: { band: { from: 4000000, to: 9000000 }, page: 1, collected: [], errors: [] } });
+  const url = run('Build Search URL', st)[0].targetUrl;
+  ok(url.includes('dsm[0].From=4000000'), 'still at the campaign floor');
+  ok(url.includes('dsm[0].To=9000000'), 'narrowed ceiling');
+  const mask = (u) => u.replace(/dsm\[0\]\.(From|To)=\d+/g, 'X');
+  eq(mask(url), mask(P.DEFAULT_SEARCH_URL), 'every other parameter byte-identical');
+});
+
+t('every band request stays at or above the campaign revenue floor', () => {
+  for (const band of [SEED_BAND, { from: 4000000, to: 5000000 }, { from: 900000000, to: 4000000000 }]) {
+    const st = newState({ input: { band, page: 1, collected: [], errors: [] } });
+    const from = Number(run('Build Search URL', st)[0].targetUrl.match(/dsm\[0\]\.From=(\d+)/)[1]);
+    ok(from >= 4000000, `band ${band.from}-${band.to} keeps the ICP floor`);
+  }
+});
+
 t('Build Search URL passes the ScrapingBee render flags through', () => {
-  const st = newState({ input: { page: 1, collected: [], errors: [] } });
+  const st = newState({ input: { band: SEED_BAND, page: 1, collected: [], errors: [] } });
   st.nodeOutputs.Config = Object.assign({}, CONFIG, { renderJs: 'true', premiumProxy: 'true' });
   const out = run('Build Search URL', st)[0];
   eq(out.renderJs, 'true');
@@ -153,102 +174,174 @@ t('Build Search URL passes the ScrapingBee render flags through', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Parse Search Results — the pagination loop
+ * Parse Search Results — pagination + the revenue-band work queue
  * ------------------------------------------------------------------ */
 
-function searchState(page, collected, resp) {
+const SEED = { from: 4000000, to: 4000000000 };
+
+function searchState(over, resp) {
   const st = newState({ input: resp });
-  st.nodeOutputs['Build Search URL'] = { page, collected: collected || [], errors: [] };
-  st.staticData.cwGrantRun = { errors: [] };
+  st.nodeOutputs['Build Search URL'] = Object.assign(
+    { band: SEED, queue: [], page: 1, bandSeen: [], collected: [], errors: [] },
+    over || {}
+  );
+  st.staticData.cwGrantRun = { errors: [], bands: [] };
   return st;
 }
 
-t('a full page asks for the next one', () => {
-  const st = searchState(1, [], httpOk(F.searchPage(20)));
-  const out = run('Parse Search Results', st)[0];
+t('a full page asks for the next one within the same band', () => {
+  const out = run('Parse Search Results', searchState({}, httpOk(F.searchPage(20))))[0];
   eq(out.hasMore, true, 'wants another page');
   eq(out.page, 2, 'advances the page counter');
+  eq(out.band, SEED, 'still the same band');
   eq(out.collected.length, 20);
 });
 
 t('pagination accumulates across pages without duplicating', () => {
-  let st = searchState(1, [], httpOk(F.searchPage(20, 1)));
-  const p1 = run('Parse Search Results', st)[0];
-
-  st = searchState(2, p1.collected, httpOk(F.searchPage(20, 21)));
-  const p2 = run('Parse Search Results', st)[0];
-
+  const p1 = run('Parse Search Results', searchState({}, httpOk(F.searchPage(20, 1))))[0];
+  const p2 = run('Parse Search Results',
+    searchState({ page: 2, collected: p1.collected, bandSeen: p1.bandSeen }, httpOk(F.searchPage(20, 21))))[0];
   eq(p2.collected.length, 40, 'two full pages accumulated');
   eq(new Set(p2.collected).size, 40, 'all distinct');
   eq(p2.hasMore, true);
 });
 
-t('an empty page ends pagination', () => {
-  const st = searchState(3, ['u1', 'u2'], httpOk(F.emptySearchPage));
-  const out = run('Parse Search Results', st)[0];
-  eq(out.hasMore, false, 'stops');
+t('an empty page ends the band; with an empty queue the crawl finishes', () => {
+  const out = run('Parse Search Results',
+    searchState({ page: 3, collected: ['u1', 'u2'], bandSeen: ['u1', 'u2'] }, httpOk(F.emptySearchPage)))[0];
+  eq(out.hasMore, false, 'nothing left to fetch');
   eq(out.stopReason, 'no_results_marker');
   eq(out.collected, ['u1', 'u2'], 'already-collected URLs are kept');
-  eq(out.errors, [], 'a normal end of pagination is not an error');
+  eq(out.errors, [], 'a normal end of results is not an error');
 });
 
-t('an empty page with no "no results" wording still ends pagination', () => {
-  const st = searchState(3, ['u1'], httpOk(F.emptySearchPageNoMarker));
-  const out = run('Parse Search Results', st)[0];
+t('an empty page with no "no results" wording still ends the band', () => {
+  const out = run('Parse Search Results',
+    searchState({ page: 3, collected: ['u1'], bandSeen: ['u1'] }, httpOk(F.emptySearchPageNoMarker)))[0];
   eq(out.hasMore, false);
   eq(out.stopReason, 'no_results_empty');
 });
 
-t('a repeated page ends pagination instead of looping forever', () => {
-  const first = run('Parse Search Results', searchState(1, [], httpOk(F.searchPage(10))))[0];
-  // The site serves page 1 again rather than 404-ing past the last page.
-  const out = run('Parse Search Results', searchState(2, first.collected, httpOk(F.searchPage(10))))[0];
+t('a repeated page ends the band instead of looping forever', () => {
+  const first = run('Parse Search Results', searchState({}, httpOk(F.searchPage(10))))[0];
+  // The site serves the same page again rather than 404-ing past the last one.
+  const out = run('Parse Search Results',
+    searchState({ page: 2, collected: first.collected, bandSeen: first.bandSeen },
+      httpOk(F.searchPage(10))))[0];
   eq(out.hasMore, false);
   eq(out.stopReason, 'repeated_results');
   eq(out.collected.length, 10, 'nothing duplicated');
 });
 
-t('a 429 stops pagination, logs it, and never retries', () => {
-  const st = searchState(2, ['u1'], httpErr(429));
-  const out = run('Parse Search Results', st)[0];
+t('repeat detection is band-scoped, not global', () => {
+  // A company already collected from ANOTHER band must not make this band look
+  // exhausted the moment it appears.
+  const already = P.parseSearchResults(F.searchPage(10)).profileUrls;
+  const out = run('Parse Search Results',
+    searchState({ band: { from: 10, to: 20 }, collected: already, bandSeen: [] },
+      httpOk(F.searchPage(10))))[0];
+  eq(out.hasMore, true, 'the band continues');
+  eq(out.page, 2);
+});
+
+t('a 429 aborts the whole crawl, logs it, and never retries', () => {
+  const out = run('Parse Search Results',
+    searchState({ page: 2, collected: ['u1'], bandSeen: ['u1'] }, httpErr(429)))[0];
   eq(out.hasMore, false);
   eq(out.stopReason, 'http_429');
   ok(out.errors[0].includes('429'), 'logged');
   ok(out.errors[0].includes('premiumProxy'), 'suggests the premium proxy');
-  eq(out.collected, ['u1'], 'rows gathered before the block are kept');
+  eq(out.collected, ['u1'], 'URLs gathered before the block are kept');
 });
 
-t('a challenge page is a failure, NOT end-of-pagination', () => {
-  const st = searchState(2, [], httpOk(F.cloudflarePage));
-  const out = run('Parse Search Results', st)[0];
+t('a challenge page is a failure, NOT end-of-results', () => {
+  const out = run('Parse Search Results', searchState({ page: 2 }, httpOk(F.cloudflarePage)))[0];
   eq(out.hasMore, false);
   ok(out.stopReason.startsWith('blocked_'), `stop reason: ${out.stopReason}`);
   ok(out.errors[0].includes('NOT as end-of-pagination'), 'explicitly distinguished');
 });
 
-t('a truncated response is a failure, NOT end-of-pagination', () => {
-  const st = searchState(2, [], httpOk(F.searchPage(20).slice(0, 3000)));
-  const out = run('Parse Search Results', st)[0];
+t('a truncated response is a failure, NOT end-of-results', () => {
+  const out = run('Parse Search Results',
+    searchState({ page: 2 }, httpOk(F.searchPage(20).slice(0, 3000))))[0];
   eq(out.hasMore, false);
   ok(out.stopReason.startsWith('blocked_'), `stop reason: ${out.stopReason}`);
 });
 
-t('maxPages caps the crawl and says so', () => {
-  const st = searchState(3, [], httpOk(F.searchPage(20)));
+t('maxPages caps a band and says so', () => {
+  const st = searchState({ page: 3 }, httpOk(F.searchPage(20)));
   st.nodeOutputs.Config = Object.assign({}, CONFIG, { maxPages: 3 });
   const out = run('Parse Search Results', st)[0];
-  eq(out.hasMore, false);
+  eq(out.hasMore, false, 'no queue left, so the crawl ends');
   eq(out.stopReason, 'max_pages_reached');
   ok(out.errors[0].includes('maxPages'), 'warns that results may remain');
 });
 
-t('maxCompanies truncates the list', () => {
-  const st = searchState(1, [], httpOk(F.searchPage(20)));
+t('maxCompanies truncates the whole crawl', () => {
+  const st = searchState({}, httpOk(F.searchPage(20)));
   st.nodeOutputs.Config = Object.assign({}, CONFIG, { maxCompanies: 5 });
   const out = run('Parse Search Results', st)[0];
   eq(out.collected.length, 5);
   eq(out.hasMore, false);
   eq(out.stopReason, 'max_companies_reached');
+});
+
+/* ---- the ~60-result ceiling ---- */
+
+t('a band that comes back at the ceiling is bisected, not accepted', () => {
+  const st = searchState({ page: 4, bandSeen: manyUrls(60) }, httpOk(F.emptySearchPage));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, true, 'the crawl continues into the halves');
+  eq(out.band.from, SEED.from, 'first half starts at the campaign floor');
+  ok(out.band.to < SEED.to, 'and ends below the original ceiling');
+  eq(out.queue.length, 1, 'the second half is queued');
+  eq(out.queue[0].to, SEED.to, 'and reaches the original top');
+  eq(out.queue[0].from, out.band.to + 1, 'the halves are adjacent, with no gap');
+  eq(st.staticData.cwGrantRun.bandsSplit, 1);
+});
+
+t('a band that comes back short is accepted as complete', () => {
+  const st = searchState({ page: 2, bandSeen: manyUrls(37) }, httpOk(F.emptySearchPage));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, false, 'no split needed');
+  eq(st.staticData.cwGrantRun.bandsSplit || 0, 0);
+});
+
+t('the next queued band restarts pagination at page 1', () => {
+  const st = searchState({
+    page: 5, band: { from: 10, to: 20 }, queue: [{ from: 21, to: 30 }],
+    bandSeen: ['u1'], collected: ['u1'],
+  }, httpOk(F.emptySearchPage));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, true);
+  eq(out.band, { from: 21, to: 30 }, 'moved to the queued band');
+  eq(out.page, 1, 'pagination restarts');
+  eq(out.bandSeen, [], 'band-scoped repeat detection resets');
+  eq(out.collected, ['u1'], 'the global list carries over');
+});
+
+t('a band at the ceiling that cannot be split is reported, not swallowed', () => {
+  const st = searchState({ band: { from: 100, to: 101 }, bandSeen: manyUrls(60) },
+    httpOk(F.emptySearchPage));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, false);
+  ok(out.errors[0].includes('too narrow to split'), `error: ${out.errors[0]}`);
+  ok(out.errors[0].includes('may be unreachable'), 'says data may be missing');
+});
+
+t('autoSplitOnCeiling=false reproduces the old capped behaviour', () => {
+  const st = searchState({ page: 4, bandSeen: manyUrls(60) }, httpOk(F.emptySearchPage));
+  st.nodeOutputs.Config = Object.assign({}, CONFIG, { autoSplitOnCeiling: 'false' });
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, false, 'stops at the ceiling, as before');
+  eq(st.staticData.cwGrantRun.bandsSplit || 0, 0);
+});
+
+t('maxBands stops runaway subdivision and says why', () => {
+  const st = searchState({ page: 4, bandSeen: manyUrls(60) }, httpOk(F.emptySearchPage));
+  st.nodeOutputs.Config = Object.assign({}, CONFIG, { maxBands: 1 });
+  const out = run('Parse Search Results', st)[0];
+  ok(out.errors[0].includes('maxBands'), `error: ${out.errors[0]}`);
 });
 
 /* ------------------------------------------------------------------ *
@@ -604,7 +697,7 @@ t('a whole run writes each company once and never writes a duplicate', () => {
 
   // --- pass 1: two full pages then an empty one
   const pages = [F.searchPage(3, 1), F.searchPage(3, 4), F.emptySearchPage];
-  let state = { page: 1, collected: [], errors: [] };
+  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
   let guard = 0;
 
   while (guard++ < 10) {
@@ -690,10 +783,100 @@ t('a whole run writes each company once and never writes a duplicate', () => {
   eq(summary.rowsWrittenToSheet, 1);
 });
 
+t('the crawl recovers the FULL list from a site that caps every search at 60', () => {
+  /*
+   * The bug this covers: a live run returned exactly 60 companies. CompanyWall
+   * serves at most ~60 results per search however deep you page, so one search
+   * can never return the whole campaign list. mockSite reproduces that cap.
+   */
+  const population = [];
+  for (let i = 1; i <= 470; i++) {
+    // Skewed like real revenue: most companies bunched just above the floor.
+    const revenue = i <= 380
+      ? 4000000 + i * 9000
+      : 40000000 + (i - 380) * 40000000;
+    population.push({ id: i, revenue });
+  }
+  const serve = F.mockSite(population, 60, 20);
+
+  const staticData = {};
+  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let requests = 0;
+
+  while (state.hasMore !== false && requests < 4000) {
+    const built = run('Build Search URL', {
+      staticData, nodeOutputs: { Config: CONFIG }, input: state,
+    })[0];
+    requests++;
+    state = run('Parse Search Results', {
+      staticData,
+      nodeOutputs: { Config: CONFIG, 'Build Search URL': built },
+      input: httpOk(serve(built.targetUrl)),
+    })[0];
+  }
+
+  eq(state.collected.length, population.length,
+    `every company found (got ${state.collected.length} of ${population.length})`);
+  eq(new Set(state.collected).size, population.length, 'and each exactly once');
+  ok(staticData.cwGrantRun.bandsSplit > 0, 'the ceiling was detected and bands were split');
+  eq(state.errors, [], 'no band was left stuck at the ceiling');
+
+  const summary = run('Run Summary', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
+  eq(summary.diagnosis, '', 'nothing reported as unreachable');
+  eq(summary.profileUrlsFound, population.length);
+});
+
+t('without subdivision the same site yields only 60 — the reported symptom', () => {
+  const population = [];
+  for (let i = 1; i <= 470; i++) population.push({ id: i, revenue: 4000000 + i * 9000 });
+  const serve = F.mockSite(population, 60, 20);
+
+  const staticData = {};
+  const cfg = Object.assign({}, CONFIG, { autoSplitOnCeiling: 'false' });
+  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let guard = 0;
+
+  while (state.hasMore !== false && guard++ < 100) {
+    const built = run('Build Search URL', { staticData, nodeOutputs: { Config: cfg }, input: state })[0];
+    state = run('Parse Search Results', {
+      staticData,
+      nodeOutputs: { Config: cfg, 'Build Search URL': built },
+      input: httpOk(serve(built.targetUrl)),
+    })[0];
+  }
+  eq(state.collected.length, 60, 'reproduces the capped run exactly');
+});
+
+t('a dense band nobody can split is surfaced in the Run Summary', () => {
+  // 200 companies all on the SAME revenue figure: no bisection can separate
+  // them, so the run must say results are missing rather than look clean.
+  const population = [];
+  for (let i = 1; i <= 200; i++) population.push({ id: i, revenue: 4000000 });
+  const serve = F.mockSite(population, 60, 20);
+
+  const staticData = {};
+  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let guard = 0;
+
+  while (state.hasMore !== false && guard++ < 3000) {
+    const built = run('Build Search URL', { staticData, nodeOutputs: { Config: CONFIG }, input: state })[0];
+    state = run('Parse Search Results', {
+      staticData,
+      nodeOutputs: { Config: CONFIG, 'Build Search URL': built },
+      input: httpOk(serve(built.targetUrl)),
+    })[0];
+  }
+
+  const summary = run('Run Summary', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
+  ok(summary.diagnosis.includes('ceiling'), `diagnosis: ${summary.diagnosis}`);
+  ok(summary.diagnosis.includes('may be missing'), 'does not pretend the run was complete');
+});
+
 t('a run that finds nothing completes cleanly instead of stalling', () => {
   const staticData = {};
   const built = run('Build Search URL', {
-    staticData, nodeOutputs: { Config: CONFIG }, input: { page: 1, collected: [], errors: [] },
+    staticData, nodeOutputs: { Config: CONFIG },
+    input: { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] },
   })[0];
   const state = run('Parse Search Results', {
     staticData,

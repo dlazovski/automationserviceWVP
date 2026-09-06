@@ -471,6 +471,71 @@ function buildSearchUrl(baseUrl, page) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Revenue bands — getting past the site's ~60-result ceiling
+ * ------------------------------------------------------------------ */
+
+/*
+ * CompanyWall serves at most ~60 results per search however deep you page.
+ * That is a display ceiling on the site, not a pagination bug: a search
+ * matching 400 companies still stops handing them over at ~60. The sister
+ * CompanyWall workflow hit the same wall and worked around it by splitting one
+ * broad search into several narrow ones.
+ *
+ * Here the split is by REVENUE BAND, which has a property the town/headcount
+ * splits do not: consecutive bands partition the range exactly — no overlap, no
+ * gaps — so the union of the slices is provably the same set the single search
+ * was asking for.
+ *
+ * The initial band is READ OUT of the configured URL rather than invented, and
+ * subdivision only ever narrows within it. The campaign filter is therefore
+ * never reconstructed or widened: every request still carries
+ * dsm[0].From >= 4000000.
+ */
+
+/** The dsm[0] revenue range currently encoded in a search URL. */
+function readRevenueBand(url) {
+  var u = String(url || '');
+  var from = u.match(/dsm\[0\]\.From=(\d+)/);
+  var to = u.match(/dsm\[0\]\.To=(\d+)/);
+  if (!from || !to) return null;
+  return { from: parseInt(from[1], 10), to: parseInt(to[1], 10) };
+}
+
+/**
+ * The same URL with ONLY dsm[0].From / dsm[0].To rewritten.
+ *
+ * Every other parameter — the NKD codes, bly, sbjact, the dsm[1] and dsm[-1]
+ * groups, the literal bracket form — is left byte-for-byte as configured.
+ */
+function withRevenueBand(url, from, to) {
+  return String(url || '')
+    .replace(/(dsm\[0\]\.From=)\d+/, '$1' + String(Math.round(from)))
+    .replace(/(dsm\[0\]\.To=)\d+/, '$1' + String(Math.round(to)));
+}
+
+/**
+ * Bisect a band into two that partition it exactly.
+ *
+ * Returns null when the band is too narrow to split — revenue is in whole
+ * denari, so a width of 1 cannot be halved. The caller reports that as a band
+ * it could not get under the ceiling.
+ */
+function splitBand(from, to) {
+  var f = Math.round(from);
+  var t = Math.round(to);
+  if (!(t > f + 1)) return null;
+  var mid = Math.floor(f + (t - f) / 2);
+  if (mid <= f || mid >= t) return null;
+  // [f, mid] and [mid + 1, t]: adjacent, non-overlapping, and together exactly
+  // the original band.
+  return [{ from: f, to: mid }, { from: mid + 1, to: t }];
+}
+
+function formatBand(band) {
+  return band ? band.from + '-' + band.to : '(none)';
+}
+
+/* ------------------------------------------------------------------ *
  * Response health checks
  * ------------------------------------------------------------------ */
 
@@ -1180,6 +1245,10 @@ if (typeof module !== 'undefined' && module.exports) {
     sectionLines: sectionLines,
     sectionHtml: sectionHtml,
     buildSearchUrl: buildSearchUrl,
+    readRevenueBand: readRevenueBand,
+    withRevenueBand: withRevenueBand,
+    splitBand: splitBand,
+    formatBand: formatBand,
     diagnoseResponse: diagnoseResponse,
     isBlockingFlag: isBlockingFlag,
     detectNoResultsMarker: detectNoResultsMarker,

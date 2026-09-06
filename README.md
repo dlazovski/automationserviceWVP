@@ -30,7 +30,7 @@ curl: (56) CONNECT tunnel failed, response 403
 
 Everything else is done and tested: the workflow graph, the pagination loop, the
 per-company ЕМБС dedupe, the rate limiting, the error routing and the Sheets
-mapping are covered by **108 passing tests**. What is *unverified* is whether the
+mapping are covered by **120 passing tests**. What is *unverified* is whether the
 label matching finds the real markup, and whether ScrapingBee needs the premium
 proxy here.
 
@@ -52,7 +52,7 @@ list of assumptions and exactly where to adjust each one.
 ### 1. Step 0 — verify against the live site
 
 ```bash
-npm test                                  # 108 tests, no dependencies to install
+npm test                                  # 120 tests, no dependencies to install
 
 SCRAPINGBEE_API_KEY=xxxxx npm run probe   # 2 real calls, ~10s, 2 credits
 ```
@@ -159,8 +159,11 @@ Open the **Config** node:
 | `googleSheetId` | `REPLACE_WITH_GOOGLE_SHEET_ID` | **Set this.** |
 | `sheetName` | `Leads` | Main tab. |
 | `errorSheetName` | `Errors` | Failure-log tab. |
-| `maxPages` | `50` | Safety cap on pagination. |
+| `maxPages` | `50` | Safety cap on pagination, **per band**. |
 | `maxCompanies` | `0` | `0` = unlimited. Set to `3` for a first trial run. |
+| `resultCeiling` | `60` | How many results a single search hands over before the site truncates. A band returning this many is assumed truncated and gets bisected. |
+| `autoSplitOnCeiling` | `"true"` | `"false"` reproduces the old single-search behaviour — and caps you at ~60 again. |
+| `maxBands` | `200` | Backstop on subdivision depth. |
 | `renderJs` | `"false"` | `"true"` only if the probe shows the financial table is missing from the raw HTML. |
 | `premiumProxy` | `"false"` | `"true"` if the probe reports a challenge. |
 
@@ -210,10 +213,35 @@ Manual Trigger → Config → Init Run → Build Search URL ←─────�
    └────────────────────────────────────────┴─────────────────────────-─┘
 ```
 
-**Pass 1 — paginated search.** Requests page 1 with no `&p`, then `&p=2`,
-`&p=3`, … The *only* thing taken from these pages is each company's profile
-`href`, exactly as it appears in the raw HTML (percent-encoded Cyrillic slug and
-all — never decoded, re-encoded or reconstructed from the company name).
+**Pass 1 — search, split into revenue bands.** CompanyWall serves **at most
+~60 results per search, however deep you page** — a display ceiling on the site,
+not a pagination bug. A single search therefore cannot return the whole campaign
+list; a live run capped out at exactly 60. (The sister CompanyWall workflow hit
+the same wall and worked around it the same way, by splitting one broad search
+into several narrow ones.)
+
+So the crawl works a **queue of revenue bands**. It starts with the band already
+in `searchUrl` (4,000,000 – 4,000,000,000), pages through it, and whenever a
+band comes back at the ceiling it bisects it and queues both halves — repeating
+until every band comes back short. Consecutive bands partition the range
+exactly, with no overlap and no gaps, so the union is provably the same set the
+single search was asking for.
+
+Only `dsm[0].From` / `dsm[0].To` are ever rewritten; every other parameter is
+passed through byte-for-byte, and every request still carries
+`From >= 4000000`. The validator checks all of that functionally, and a test
+runs the whole crawl against a mock site that enforces the 60-cap: **470 of 470
+companies recovered, versus 60 with subdivision turned off.**
+
+Rough cost: ~110 search requests for ~470 companies (plus one profile request
+each). If a band cannot be split far enough — 60+ companies on an identical
+revenue figure — `Run Summary.diagnosis` says so rather than letting the run
+look complete.
+
+Requests page 1 with no `&p`, then `&p=2`, `&p=3`, … The *only* thing taken from
+these pages is each company's profile `href`, exactly as it appears in the raw
+HTML (percent-encoded Cyrillic slug and all — never decoded, re-encoded or
+reconstructed from the company name).
 
 **Pass 2 — profile pages.** One request per company. All 12 fields come from the
 *Резиме* tab.
@@ -302,7 +330,7 @@ src/nodes/*.js              ← One file per n8n Code node.
 build/build-workflow.js     ← Inlines parsers.js into each Code node, emits the JSON.
 build/validate-workflow.js  ← Structural + policy checks on the generated workflow.
 scripts/step0-probe.js      ← Step 0 live verification.
-test/                       ← 108 tests (parsers + end-to-end node simulation).
+test/                       ← 120 tests (parsers + end-to-end node simulation).
 workflow/                   ← The importable n8n workflow (generated, committed).
 docs/                       ← Every extraction assumption, and where to change it.
 ```
@@ -325,7 +353,7 @@ npm test
   signals, challenge-vs-empty-page classification, every profile field, the
   descending-year financial table, the no-`<table>` fallback, and the sheet row
   shape.
-- `test/workflow-sim.test.js` (49) — executes the **generated** Code nodes with
+- `test/workflow-sim.test.js` (61) — executes the **generated** Code nodes with
   mocked n8n globals: the real pagination loop (termination, repeat detection,
   403/429, caps), the per-company ЕМБС dedupe, error routing, and a full
   search → profile → dedupe → sheet run.
@@ -344,10 +372,13 @@ prove the rules match the real page. Only `npm run probe` does that.
    `&p` on page 1. `npm run probe -- --compare-pages` settles it.
 3. **Whether ScrapingBee needs the premium proxy.** Reported by the probe; flip
    `premiumProxy` to `"true"` in Config if so.
-4. **Whether the ФИНАНСИСКО РЕЗИМЕ table is server-rendered.** If the probe
+4. **Whether the ceiling is exactly 60.** A live run capped at 60 and the
+   sister workflow reports "~60". `resultCeiling` in Config is the knob; lower
+   it if you see bands stopping just short of 60 and suspect truncation.
+5. **Whether the ФИНАНСИСКО РЕЗИМЕ table is server-rendered.** If the probe
    cannot find the `Добивка/загуба` row *and* the row is absent from
    `tmp/profile.html`, it is JavaScript-rendered: set `renderJs` to `"true"`
    (this costs more ScrapingBee credits per request).
-5. **Whether the year columns run oldest-first.** The parser does not assume
+6. **Whether the year columns run oldest-first.** The parser does not assume
    either way — it selects the column whose header is the **maximum** year, and
    the probe prints the full year→value map so the choice can be checked.

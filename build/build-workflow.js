@@ -334,6 +334,12 @@ const nodes = [
           { id: 'cfg-error-sheet', name: 'errorSheetName', value: 'Errors', type: 'string' },
           { id: 'cfg-max-pages', name: 'maxPages', value: 50, type: 'number' },
           { id: 'cfg-max-companies', name: 'maxCompanies', value: 0, type: 'number' },
+          // The site serves at most ~60 results per search however deep you
+          // page. A band that comes back at this number is assumed truncated
+          // and is bisected until every band comes back short.
+          { id: 'cfg-ceiling', name: 'resultCeiling', value: 60, type: 'number' },
+          { id: 'cfg-autosplit', name: 'autoSplitOnCeiling', value: 'true', type: 'string' },
+          { id: 'cfg-max-bands', name: 'maxBands', value: 200, type: 'number' },
           { id: 'cfg-render-js', name: 'renderJs', value: 'false', type: 'string' },
           { id: 'cfg-premium', name: 'premiumProxy', value: 'false', type: 'string' },
         ],
@@ -346,7 +352,7 @@ const nodes = [
     type: 'n8n-nodes-base.set',
     typeVersion: 3.4,
     position: [-600, 300],
-    notes: 'SET googleSheetId HERE. searchUrl already carries the >4,000,000 MKD revenue filter.',
+    notes: 'SET googleSheetId HERE. searchUrl carries the >4,000,000 MKD revenue filter; the crawl subdivides it to beat the site\'s ~60-result ceiling.',
     notesInFlow: true,
   },
 
@@ -359,7 +365,7 @@ const nodes = [
     'GET one search-results page. Pagination appends &p=N to the Config URL.'),
   codeNode('Parse Search Results', 'parse-search-results.js', [500, 300]),
   ifNode('More Pages?', '={{ $json.hasMore }}', [720, 300],
-    'true = request the next page; false = the last page was reached.'),
+    'true = another page of this band, or the next band; false = every band done.'),
 
   codeNode('Emit Profile URLs', 'emit-profile-urls.js', [940, 420]),
 
@@ -425,20 +431,26 @@ nodes.push(
   ),
   stickyNote(
     [
-      '### Pass 1 — paginated search',
+      '### Pass 1 — search, split into revenue bands',
       '',
-      'The Config `searchUrl` already contains the campaign filter',
-      '(`dsm[0].From=4000000` = revenue above 4,000,000 MKD). It is carried',
-      'through verbatim; pagination only appends `&p=2`, `&p=3`, … Page 1 is',
-      'requested with no `&p` at all.',
+      '**The site serves at most ~60 results per search, however deep you**',
+      '**page.** A single search therefore CANNOT return the whole campaign',
+      'list. So the crawl works a queue of revenue bands: it starts with the',
+      'band already in `searchUrl` (`4,000,000 – 4,000,000,000`), and whenever',
+      'a band comes back at the ceiling it is bisected and both halves are',
+      'queued. Consecutive bands partition the range exactly, so the union is',
+      'the same set the single search was asking for.',
       '',
-      '**Stop condition:** the page yields zero `/kompanija/` profile links',
-      '(primary), or a Cyrillic "no results" phrase appears, or the page',
-      'returns only companies already collected. A 403/429/challenge is',
-      'treated as a FAILURE, never as end-of-pagination.',
+      'Only `dsm[0].From` / `dsm[0].To` are ever rewritten. Every other',
+      'parameter is passed through byte-for-byte, and every request still',
+      'carries `From >= 4000000`.',
+      '',
+      '**End of a band:** zero `/kompanija/` links (primary), a Cyrillic "no',
+      'results" phrase, or only companies already seen in THIS band. A',
+      '403/429/challenge is a FAILURE, never end-of-results.',
       'Adjust in `src/parsers.js` → `PROFILE_HREF_RE` / `NO_RESULTS_PATTERNS`.',
       '',
-      'Only the profile href is taken from this page — nothing else.',
+      'Only the profile href is taken from these pages — nothing else.',
     ].join('\n'),
     [-160, 60], [1060, 210], 5
   ),

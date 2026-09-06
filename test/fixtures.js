@@ -164,7 +164,44 @@ function profilePage(opts) {
   return page(`<main class="profile">${header}${contacts}${basic}${financial}</main>`);
 }
 
+/**
+ * A mock CompanyWall search that enforces the site's ~60-result ceiling.
+ *
+ * `population` is a list of { id, revenue }. A search for a revenue band
+ * returns the matching companies, 20 per page, but NEVER hands over more than
+ * `ceiling` of them in total however deep you page — which is exactly the
+ * behaviour that capped a live run at 60.
+ */
+function mockSite(population, ceiling, perPage) {
+  const cap = ceiling === undefined ? 60 : ceiling;
+  const size = perPage || 20;
+
+  return function serve(url) {
+    const from = Number((url.match(/dsm\[0\]\.From=(\d+)/) || [])[1]);
+    const to = Number((url.match(/dsm\[0\]\.To=(\d+)/) || [])[1]);
+    const p = Number((url.match(/[?&]p=(\d+)/) || [])[1] || 1);
+
+    const matching = population
+      .filter((c) => c.revenue >= from && c.revenue <= to)
+      .slice(0, cap);                       // <-- the site's display ceiling
+
+    const slice = matching.slice((p - 1) * size, p * size);
+    if (!slice.length) return emptySearchPage;
+
+    let rows = '';
+    for (const c of slice) {
+      const href = `/kompanija/${ENCODED_SLUG}-${c.id}/MMA8dAg${c.id}`;
+      rows += `<div class="result-row">
+        <a href="${href}"><img src="/logo.png" alt=""></a>
+        <a href="${href}"><h3>КОМПАНИЈА ${c.id}</h3></a>
+      </div>`;
+    }
+    return page(`<main id="results">${rows}</main>`);
+  };
+}
+
 module.exports = {
+  mockSite,
   ENCODED_SLUG,
   page,
   searchPage,
