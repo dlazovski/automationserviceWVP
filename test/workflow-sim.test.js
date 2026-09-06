@@ -402,8 +402,29 @@ t('an empty lookup result (alwaysOutputData) means "new"', () => {
   const st = dedupeState({});
   const out = run('Check Duplicate', st)[0];
   eq(out.__isNew, true);
-  eq(out['EMBS'], '6543210');
-  eq(Object.keys(out).slice(0, 14), P.SHEET_HEADERS, 'the row keeps the sheet column order');
+  eq(out.embs, '6543210');
+});
+
+t('Check Duplicate emits a control item only, never the sheet row', () => {
+  // A control key reaching autoMapInputData either adds a column to the user's
+  // sheet or fails the append outright — it is not silently ignored.
+  const out = run('Check Duplicate', dedupeState({}))[0];
+  const leaked = P.SHEET_HEADERS.filter((h) => h in out);
+  eq(leaked, [], 'no sheet columns on the control item');
+});
+
+t('Build Sheet Row emits exactly the 14 columns and nothing else', () => {
+  const profile = run('Parse Profile', profileState(httpOk(F.profilePage())))[0];
+  const st = newState({ input: { __isNew: true } });
+  st.nodeOutputs['Parse Profile'] = profile;
+  st.staticData.cwGrantRun = { errors: [] };
+
+  const row = run('Build Sheet Row', st)[0];
+  eq(Object.keys(row), P.SHEET_HEADERS, 'exact shape for auto-map');
+  ok(!('__isNew' in row), 'no control key');
+  ok(!('ok' in row) && !('missing' in row), 'no parse metadata');
+  eq(row['EMBS'], '6543210');
+  eq(st.staticData.cwGrantRun.rowsWritten, 1, 'counted as handed to the append node');
 });
 
 t('a different EMBS in the lookup result does not count as a match', () => {
@@ -452,6 +473,47 @@ t('a Google Sheets append that failed after its retries is logged, not lost', ()
   eq(out['Written To Main Sheet'], 'no', 'the row did not land');
   ok(out['Error'].includes('Google Sheets append failed'), `error text: ${out['Error']}`);
   eq(st.staticData.cwGrantRun.rowsWritten, 0, 'the optimistic count is corrected');
+});
+
+t('an n8n error OBJECT is rendered readably, not as "[object Object]"', () => {
+  // This is the shape n8n actually passes through with continueRegularOutput.
+  const good = run('Parse Profile', profileState(httpOk(F.profilePage())))[0];
+  const st = newState({
+    input: {
+      error: {
+        message: 'The resource you are requesting could not be found',
+        description: "Sheet 'Leads' not found in the spreadsheet",
+        httpCode: '404',
+      },
+    },
+  });
+  st.nodeOutputs['Parse Profile'] = good;
+  st.staticData.cwGrantRun = { errors: [], rowsWritten: 1 };
+
+  const out = run('Build Error Row', st)[0];
+  ok(!out['Error'].includes('[object Object]'), `must be readable, got: ${out['Error']}`);
+  ok(out['Error'].includes("Sheet 'Leads' not found"), 'the actionable part survives');
+  ok(out['Error'].includes('404'), 'the status code survives');
+});
+
+t('Run Summary names the cause when profiles were scraped but nothing was written', () => {
+  const st = newState();
+  st.staticData.cwGrantRun = {
+    startedAt: '2026-09-06T10:00:00.000Z',
+    profilesFetched: 12, rowsWritten: 0, duplicatesSkipped: 0,
+    errors: ["[sheets] https://x: Google Sheets append failed after retries: Sheet 'Leads' not found"],
+  };
+  const out = run('Run Summary', st)[0];
+  ok(out.diagnosis.includes('NO rows reached the sheet'), 'the failure is named');
+  ok(out.diagnosis.includes('tab name'), 'points at the most likely cause');
+  eq(out.sheetsErrors.length, 1, 'the Sheets errors are surfaced separately');
+});
+
+t('Run Summary stays quiet when a re-run legitimately writes nothing', () => {
+  const st = newState();
+  st.staticData.cwGrantRun = { profilesFetched: 12, rowsWritten: 0, duplicatesSkipped: 12, errors: [] };
+  const out = run('Run Summary', st)[0];
+  ok(out.diagnosis.includes('duplicate'), 'explains it as a normal re-run');
 });
 
 t('a partial success produces an Errors row marked "written"', () => {
@@ -566,8 +628,9 @@ t('a whole run writes each company once and never writes a duplicate', () => {
 
     if (!checked.__isNew) continue;                      // "Is New?" false -> skip
 
-    const row = {};
-    for (const k of P.SHEET_HEADERS) row[k] = checked[k];
+    const row = run('Build Sheet Row', {
+      staticData, nodeOutputs: { Config: CONFIG, 'Parse Profile': profile }, input: checked,
+    })[0];
     sheet.push(row);                                     // append
 
     if (profile.hasMissing) {                            // "Log Missing Fields?" true

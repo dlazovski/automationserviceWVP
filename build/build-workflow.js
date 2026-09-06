@@ -380,15 +380,16 @@ const nodes = [
   codeNode('Check Duplicate', 'check-duplicate.js', [2920, 540]),
   ifNode('Is New?', '={{ $json.__isNew }}', [3140, 540],
     'false = this EMBS is already in the sheet -> skip the company entirely.'),
-  sheetsAppendNode('Google Sheets: Append Row', [3360, 460],
+  codeNode('Build Sheet Row', 'build-sheet-row.js', [3360, 380]),
+  sheetsAppendNode('Google Sheets: Append Row', [3580, 380],
     "={{ $('Config').first().json.sheetName }}",
     'Appends one lead row. Header row must match the 14 column names exactly.'),
   ifNode('Log Missing Fields?',
-    "={{ $('Parse Profile').first().json.hasMissing || !!$json.error }}", [3580, 460],
+    "={{ $('Parse Profile').first().json.hasMissing || !!$json.error }}", [3800, 380],
     'Logs blank fields, and a Sheets append that failed after its retries.'),
 
-  codeNode('Build Error Row', 'build-error-row.js', [3360, 800]),
-  sheetsAppendNode('Google Sheets: Append Error Row', [3580, 800],
+  codeNode('Build Error Row', 'build-error-row.js', [3580, 800]),
+  sheetsAppendNode('Google Sheets: Append Error Row', [3800, 800],
     "={{ $('Config').first().json.errorSheetName }}",
     'Separate "Errors" tab — 7 columns, see README.'),
 
@@ -466,6 +467,11 @@ nodes.push(
       '',
       '`alwaysOutputData` on the lookup is required — with no match the node',
       'would otherwise return zero items and stall the loop.',
+      '',
+      '**Build Sheet Row** emits exactly the 14 columns and nothing else, so no',
+      'control key ever reaches auto-map. If the append still fails, the cause',
+      'is the sheet itself: check the TAB NAME and that row 1 holds the 14',
+      'headers, spelled exactly. Open `Run Summary` — it names the error.',
     ].join('\n'),
     [2700, 220], [880, 190], 3
   ),
@@ -551,12 +557,13 @@ const connections = {
 
   'Is New?': {
     main: [
-      [{ node: 'Google Sheets: Append Row', type: 'main', index: 0 }],
+      [{ node: 'Build Sheet Row', type: 'main', index: 0 }],
       // Duplicate EMBS: skip the company entirely and take the next one.
       [{ node: 'Loop Companies', type: 'main', index: 0 }],
     ],
   },
 
+  'Build Sheet Row': { main: [[{ node: 'Google Sheets: Append Row', type: 'main', index: 0 }]] },
   'Google Sheets: Append Row': { main: [[{ node: 'Log Missing Fields?', type: 'main', index: 0 }]] },
   'Log Missing Fields?': {
     main: [

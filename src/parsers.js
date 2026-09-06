@@ -174,6 +174,32 @@ function firstInt(s) {
   return m ? parseInt(m[0], 10) : null;
 }
 
+/**
+ * Readable text out of whatever n8n put in an item's `error` property.
+ *
+ * With `onError: continueRegularOutput` a failed node passes its input item
+ * through with an `error` added, and that is usually an OBJECT (a NodeApiError,
+ * or `{ message, description }`) — never a string. `String(err)` on it yields
+ * "[object Object]", which is worse than useless when a Google Sheets append is
+ * failing and this text is the only record of why.
+ */
+function errorMessage(e) {
+  if (e === null || e === undefined) return '';
+  if (typeof e === 'string') return e;
+  if (typeof e !== 'object') return String(e);
+
+  var parts = [];
+  if (e.message) parts.push(String(e.message));
+  if (e.description && String(e.description) !== String(e.message)) parts.push(String(e.description));
+  if (!parts.length && e.error) return errorMessage(e.error);
+  if (!parts.length && e.reason) return errorMessage(e.reason);
+  if (parts.length) {
+    if (e.httpCode) parts.push('HTTP ' + e.httpCode);
+    return parts.join(' — ');
+  }
+  try { return JSON.stringify(e).slice(0, 500); } catch (x) { return String(e); }
+}
+
 /* ------------------------------------------------------------------ *
  * Validators
  * ------------------------------------------------------------------ */
@@ -1068,6 +1094,7 @@ if (typeof module !== 'undefined' && module.exports) {
     digitsOnly: digitsOnly,
     escapeRe: escapeRe,
     uniqBy: uniqBy,
+    errorMessage: errorMessage,
     mkNumber: mkNumber,
     firstInt: firstInt,
     isEmail: isEmail,

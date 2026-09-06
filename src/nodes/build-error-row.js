@@ -21,7 +21,7 @@ run.errorRowsWritten = (run.errorRowsWritten || 0) + 1;
 // is the fetch failure. Only on the post-append path does `error` mean the
 // Google Sheets append failed, and `ok` tells the two paths apart.
 const profileFailed = incoming.ok === false;
-const appendError = (!profileFailed && incoming.error) ? String(incoming.error) : '';
+const appendError = (!profileFailed && incoming.error) ? errorMessage(incoming.error) : '';
 
 const written = profile.ok === true && !appendError;
 

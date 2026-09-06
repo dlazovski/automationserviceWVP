@@ -92,6 +92,16 @@ t('isEmail rejects the site\'s own addresses and image filenames', () => {
   ok(!P.isEmail('logo@2x.png'), 'image filename must be blocked');
 });
 
+t('errorMessage renders n8n error objects readably', () => {
+  eq(P.errorMessage('plain string'), 'plain string');
+  eq(P.errorMessage({ message: 'Bad request', description: 'Sheet not found', httpCode: '404' }),
+    'Bad request — Sheet not found — HTTP 404');
+  eq(P.errorMessage({ message: 'Same', description: 'Same' }), 'Same', 'no duplicated text');
+  eq(P.errorMessage({ error: { message: 'nested' } }), 'nested');
+  ok(!P.errorMessage({ weird: true }).includes('[object Object]'), 'never [object Object]');
+  eq(P.errorMessage(null), '');
+});
+
 /* ------------------------------------------------------------------ *
  * Search URL — pagination only
  * ------------------------------------------------------------------ */

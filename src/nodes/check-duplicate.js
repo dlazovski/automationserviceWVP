@@ -25,7 +25,7 @@ const embs = String(profile.embs || '').trim();
 const lookupError = lookupItems.find((i) => i && i.error);
 if (lookupError) {
   run.errors.push('[dedupe] ' + profile.profileUrl +
-    ': the Google Sheets EMBS lookup failed (' + String(lookupError.error) +
+    ': the Google Sheets EMBS lookup failed (' + errorMessage(lookupError.error) +
     '). Treated as NOT a duplicate — check this row by hand.');
 }
 
@@ -46,15 +46,21 @@ if (isDuplicate) {
   }];
 }
 
-// The 14 sheet columns, in the brief's order, plus one control key. The Google
-// Sheets node auto-maps by header name, so "__isNew" (no matching header) is
-// ignored on write.
-const row = {};
-for (const key of SHEET_HEADERS) row[key] = profile[key] === undefined ? '' : profile[key];
-row.__isNew = true;
-
-// Counts rows handed to the append node. "Build Error Row" decrements this if
-// the append itself comes back with an error, so the summary stays truthful.
-run.rowsWritten = (run.rowsWritten || 0) + 1;
-
-return [{ json: row }];
+/*
+ * Emit a CONTROL item, not the sheet row.
+ *
+ * The row itself is shaped by "Build Sheet Row" on the other side of the
+ * "Is New?" IF. That keeps control keys away from the Google Sheets node
+ * entirely: with mappingMode `autoMapInputData`, a key that has no matching
+ * header is NOT quietly ignored — depending on the node's "handling extra data"
+ * setting it either adds a column to your sheet or fails the append. Shipping
+ * the flag in the row was a latent bug; this removes the whole class of it.
+ */
+return [{
+  json: {
+    __isNew: true,
+    embs: embs,
+    profileUrl: profile.profileUrl || '',
+    skippedAsDuplicate: false,
+  },
+}];

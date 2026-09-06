@@ -100,13 +100,14 @@ check(profileOk[1][0].node === 'Build Error Row',
   'Profile OK? false branch must go to Build Error Row, so a failure is logged and the run continues');
 
 const isNew = wf.connections['Is New?'].main;
-check(isNew[0][0].node === 'Google Sheets: Append Row', 'Is New? true branch must append the row');
+check(isNew[0][0].node === 'Build Sheet Row', 'Is New? true branch must go through Build Sheet Row');
 check(isNew[1][0].node === 'Loop Companies',
   'Is New? false branch must skip the company (no duplicate row, no update)');
 
 // The dedupe check must sit between the profile parse and the append — never
 // after it, and never as a separate bulk pass.
-const dedupePath = ['Profile OK?', 'Google Sheets: Lookup EMBS', 'Check Duplicate', 'Is New?', 'Google Sheets: Append Row'];
+const dedupePath = ['Profile OK?', 'Google Sheets: Lookup EMBS', 'Check Duplicate', 'Is New?',
+  'Build Sheet Row', 'Google Sheets: Append Row'];
 for (let i = 0; i < dedupePath.length - 1; i++) {
   const outs = (wf.connections[dedupePath[i]].main || []).flat().map((l) => l.node);
   check(outs.includes(dedupePath[i + 1]),
@@ -261,7 +262,7 @@ if (String(sheetIdCfg).startsWith('REPLACE_WITH')) {
 /* ---- Code nodes must actually compile ---- */
 
 const codeNodes = wf.nodes.filter((n) => n.type === 'n8n-nodes-base.code');
-check(codeNodes.length === 9, `expected 9 Code nodes, found ${codeNodes.length}`);
+check(codeNodes.length === 10, `expected 10 Code nodes, found ${codeNodes.length}`);
 
 for (const c of codeNodes) {
   const src = c.parameters.jsCode;
@@ -276,6 +277,17 @@ for (const c of codeNodes) {
   check(!src.includes('require('), `Code node "${c.name}" uses require(), unavailable in the n8n sandbox`);
   check(!src.includes('module.exports'), `Code node "${c.name}" still contains module.exports`);
 }
+
+/*
+ * The node feeding the main append must emit ONLY the sheet columns. With
+ * autoMapInputData an unmatched key is not ignored: n8n either adds a column to
+ * the user's sheet or fails the append outright.
+ */
+const rowBuilder = byName.get('Build Sheet Row');
+check(rowBuilder && /for \(const key of SHEET_HEADERS\)/.test(rowBuilder.parameters.jsCode),
+  'Build Sheet Row must build the row strictly from SHEET_HEADERS');
+check(rowBuilder && !/__isNew/.test(rowBuilder.parameters.jsCode),
+  'Build Sheet Row must not carry a control key into the Google Sheets node');
 
 /* ---- the sheet contract ---- */
 

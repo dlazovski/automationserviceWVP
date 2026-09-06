@@ -158,7 +158,7 @@ so it must match row 1 of your sheet character for character.
    working.
 4. `npm run probe` again until clean.
 5. `npm run verify` — rebuilds the workflow JSON, re-runs the structural checks
-   and all 93 tests.
+   and all 99 tests.
 6. Re-import `workflow/companywall-mk-grant-leads.json` into n8n.
 
 Never edit the extraction rules inside the workflow JSON: each of the 9 Code
