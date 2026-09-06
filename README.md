@@ -30,7 +30,7 @@ curl: (56) CONNECT tunnel failed, response 403
 
 Everything else is done and tested: the workflow graph, the pagination loop, the
 per-company ЕМБС dedupe, the rate limiting, the error routing and the Sheets
-mapping are covered by **120 passing tests**. What is *unverified* is whether the
+mapping are covered by **124 passing tests**. What is *unverified* is whether the
 label matching finds the real markup, and whether ScrapingBee needs the premium
 proxy here.
 
@@ -52,7 +52,7 @@ list of assumptions and exactly where to adjust each one.
 ### 1. Step 0 — verify against the live site
 
 ```bash
-npm test                                  # 120 tests, no dependencies to install
+npm test                                  # 124 tests, no dependencies to install
 
 SCRAPINGBEE_API_KEY=xxxxx npm run probe   # 2 real calls, ~10s, 2 credits
 ```
@@ -161,9 +161,22 @@ Open the **Config** node:
 | `errorSheetName` | `Errors` | Failure-log tab. |
 | `maxPages` | `50` | Safety cap on pagination, **per band**. |
 | `maxCompanies` | `0` | `0` = unlimited. Set to `3` for a first trial run. |
-| `resultCeiling` | `60` | How many results a single search hands over before the site truncates. A band returning this many is assumed truncated and gets bisected. |
+| `resultCeiling` | `60` | How many results a single search hands over before the site truncates. A band returning this many is assumed truncated and gets bisected. **If a run comes back short, this and `maxBands` are the two knobs — and they must be changed together** (see below). |
 | `autoSplitOnCeiling` | `"true"` | `"false"` reproduces the old single-search behaviour — and caps you at ~60 again. |
-| `maxBands` | `200` | Backstop on subdivision depth. |
+| `maxBands` | `2000` | Backstop on subdivision depth. Hitting it silently loses companies, so it is deliberately generous. |
+
+**If a run comes back short**, open `Run Summary` and read `maxBandSize`,
+`observedCapBelowConfigured`, `observedPageSize` and the `bands` array. Then:
+
+| What you see | Fix |
+|---|---|
+| `errors` mentions `maxBands` | Raise `maxBands`. |
+| Band `found` values cluster at a number below `resultCeiling` | Set `resultCeiling` to that number **and** raise `maxBands` — lowering the ceiling alone makes things worse, because the extra splitting exhausts the band budget. |
+| `paginationStopReason` is `http_429` or `blocked_*` | Set `premiumProxy` to `"true"`. A block aborts the whole crawl, keeping only what was collected. |
+| `duplicatesSkipped` is large | The run was fine; those companies were already in the sheet from an earlier run. |
+
+Runs are **additive** — dedupe is by EMBS against the sheet — so re-running with
+different settings tops up the missing companies without creating duplicates.
 | `renderJs` | `"false"` | `"true"` only if the probe shows the financial table is missing from the raw HTML. |
 | `premiumProxy` | `"false"` | `"true"` if the probe reports a challenge. |
 
@@ -330,7 +343,7 @@ src/nodes/*.js              ← One file per n8n Code node.
 build/build-workflow.js     ← Inlines parsers.js into each Code node, emits the JSON.
 build/validate-workflow.js  ← Structural + policy checks on the generated workflow.
 scripts/step0-probe.js      ← Step 0 live verification.
-test/                       ← 120 tests (parsers + end-to-end node simulation).
+test/                       ← 124 tests (parsers + end-to-end node simulation).
 workflow/                   ← The importable n8n workflow (generated, committed).
 docs/                       ← Every extraction assumption, and where to change it.
 ```
@@ -353,7 +366,7 @@ npm test
   signals, challenge-vs-empty-page classification, every profile field, the
   descending-year financial table, the no-`<table>` fallback, and the sheet row
   shape.
-- `test/workflow-sim.test.js` (61) — executes the **generated** Code nodes with
+- `test/workflow-sim.test.js` (65) — executes the **generated** Code nodes with
   mocked n8n globals: the real pagination loop (termination, repeat detection,
   403/429, caps), the per-company ЕМБС dedupe, error routing, and a full
   search → profile → dedupe → sheet run.

@@ -172,9 +172,10 @@ function profilePage(opts) {
  * `ceiling` of them in total however deep you page — which is exactly the
  * behaviour that capped a live run at 60.
  */
-function mockSite(population, ceiling, perPage) {
+function mockSite(population, ceiling, perPage, opts) {
   const cap = ceiling === undefined ? 60 : ceiling;
   const size = perPage || 20;
+  const o = opts || {};
 
   return function serve(url) {
     const from = Number((url.match(/dsm\[0\]\.From=(\d+)/) || [])[1]);
@@ -185,7 +186,16 @@ function mockSite(population, ceiling, perPage) {
       .filter((c) => c.revenue >= from && c.revenue <= to)
       .slice(0, cap);                       // <-- the site's display ceiling
 
-    const slice = matching.slice((p - 1) * size, p * size);
+    let slice = matching.slice((p - 1) * size, p * size);
+
+    /*
+     * `repeatPastPage`: instead of serving an empty page past the cap, the site
+     * hands back an earlier page again. That is a truncation the crawl must
+     * recognise even when the count is well under `ceiling`.
+     */
+    if (!slice.length && o.repeatPastPage && matching.length) {
+      slice = matching.slice(0, size);
+    }
     if (!slice.length) return emptySearchPage;
 
     let rows = '';

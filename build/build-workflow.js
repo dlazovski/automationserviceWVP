@@ -339,7 +339,10 @@ const nodes = [
           // and is bisected until every band comes back short.
           { id: 'cfg-ceiling', name: 'resultCeiling', value: 60, type: 'number' },
           { id: 'cfg-autosplit', name: 'autoSplitOnCeiling', value: 'true', type: 'string' },
-          { id: 'cfg-max-bands', name: 'maxBands', value: 200, type: 'number' },
+          // Backstop only. Raised from 200 because truncation is now detected on
+          // three signals, not just the ceiling, so far more bands get split —
+          // and hitting this cap silently loses companies.
+          { id: 'cfg-max-bands', name: 'maxBands', value: 2000, type: 'number' },
           { id: 'cfg-render-js', name: 'renderJs', value: 'false', type: 'string' },
           { id: 'cfg-premium', name: 'premiumProxy', value: 'false', type: 'string' },
         ],

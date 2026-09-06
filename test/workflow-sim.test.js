@@ -222,15 +222,47 @@ t('an empty page with no "no results" wording still ends the band', () => {
   eq(out.stopReason, 'no_results_empty');
 });
 
-t('a repeated page ends the band instead of looping forever', () => {
+t('a repeat on a NON page boundary is a real end, not a truncation', () => {
+  // 10 results, page size 20: the site ran out mid-page. Splitting here would
+  // subdivide forever on any site that serves page 1 again past the end.
   const first = run('Parse Search Results', searchState({}, httpOk(F.searchPage(10))))[0];
-  // The site serves the same page again rather than 404-ing past the last one.
-  const out = run('Parse Search Results',
-    searchState({ page: 2, collected: first.collected, bandSeen: first.bandSeen },
-      httpOk(F.searchPage(10))))[0];
-  eq(out.hasMore, false);
+  const st = searchState({ page: 2, collected: first.collected, bandSeen: first.bandSeen },
+    httpOk(F.searchPage(10)));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, false, 'accepted as complete');
   eq(out.stopReason, 'repeated_results');
-  eq(out.collected.length, 10, 'nothing duplicated');
+  eq(st.staticData.cwGrantRun.bandsSplit || 0, 0, 'no split');
+});
+
+t('a repeat ON a page boundary is a cap below the configured ceiling', () => {
+  /*
+   * The site served a page we had already seen instead of advancing. A band we
+   * genuinely exhausted ends with an EMPTY page, never with a repeat — so this
+   * band was cut short and must be split, even though 10 is far below the
+   * configured ceiling of 60. Relying on the ceiling alone is what left a live
+   * run short at 143.
+   */
+  // 40 results at a page size of 20, then a repeat: a cap on a page boundary,
+  // well under the configured ceiling of 60.
+  const p1 = run('Parse Search Results', searchState({}, httpOk(F.searchPage(20, 1))))[0];
+  const p2 = run('Parse Search Results',
+    searchState({ page: 2, collected: p1.collected, bandSeen: p1.bandSeen },
+      httpOk(F.searchPage(20, 21))))[0];
+  const st = searchState({ page: 3, collected: p2.collected, bandSeen: p2.bandSeen },
+    httpOk(F.searchPage(20, 1)));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, true, 'the band is retried as two narrower ones');
+  eq(st.staticData.cwGrantRun.bandsSplit, 1, 'split despite being under the ceiling');
+  eq(st.staticData.cwGrantRun.observedCap, 40, 'records the cap actually observed');
+});
+
+t('an EMPTY page below the ceiling really is exhaustion — no split', () => {
+  const first = run('Parse Search Results', searchState({}, httpOk(F.searchPage(10))))[0];
+  const st = searchState({ page: 2, collected: first.collected, bandSeen: first.bandSeen },
+    httpOk(F.emptySearchPage));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.hasMore, false, 'accepted as complete');
+  eq(st.staticData.cwGrantRun.bandsSplit || 0, 0);
 });
 
 t('repeat detection is band-scoped, not global', () => {
@@ -268,13 +300,15 @@ t('a truncated response is a failure, NOT end-of-results', () => {
   ok(out.stopReason.startsWith('blocked_'), `stop reason: ${out.stopReason}`);
 });
 
-t('maxPages caps a band and says so', () => {
+t('maxPages caps a band, warns, and treats the band as truncated', () => {
+  // We stopped, the site did not — so the band is incomplete and gets split.
   const st = searchState({ page: 3 }, httpOk(F.searchPage(20)));
   st.nodeOutputs.Config = Object.assign({}, CONFIG, { maxPages: 3 });
   const out = run('Parse Search Results', st)[0];
-  eq(out.hasMore, false, 'no queue left, so the crawl ends');
-  eq(out.stopReason, 'max_pages_reached');
+  eq(out.stopReason, '', 'moved on to the first half');
+  eq(out.hasMore, true, 'the band is retried as two narrower ones');
   ok(out.errors[0].includes('maxPages'), 'warns that results may remain');
+  eq(st.staticData.cwGrantRun.bandsSplit, 1);
 });
 
 t('maxCompanies truncates the whole crawl', () => {
@@ -320,13 +354,14 @@ t('the next queued band restarts pagination at page 1', () => {
   eq(out.collected, ['u1'], 'the global list carries over');
 });
 
-t('a band at the ceiling that cannot be split is reported, not swallowed', () => {
+t('a truncated band that cannot be split is reported, not swallowed', () => {
   const st = searchState({ band: { from: 100, to: 101 }, bandSeen: manyUrls(60) },
     httpOk(F.emptySearchPage));
   const out = run('Parse Search Results', st)[0];
   eq(out.hasMore, false);
   ok(out.errors[0].includes('too narrow to split'), `error: ${out.errors[0]}`);
-  ok(out.errors[0].includes('may be unreachable'), 'says data may be missing');
+  ok(out.errors[0].includes('unreachable'), 'says data is missing');
+  ok(out.errors[0].includes('at='), 'names the other axis to narrow on');
 });
 
 t('autoSplitOnCeiling=false reproduces the old capped behaviour', () => {
@@ -824,6 +859,68 @@ t('the crawl recovers the FULL list from a site that caps every search at 60', (
   const summary = run('Run Summary', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
   eq(summary.diagnosis, '', 'nothing reported as unreachable');
   eq(summary.profileUrlsFound, population.length);
+});
+
+t('the crawl self-corrects when the site truncates BELOW the configured ceiling', () => {
+  /*
+   * The 143-result run: bands were being cut short below 60 and accepted as
+   * complete, because only `found >= resultCeiling` triggered a split. Here the
+   * site hands over just 25 per search and repeats a page rather than going
+   * empty — with resultCeiling left at its default 60.
+   */
+  const population = [];
+  for (let i = 1; i <= 400; i++) population.push({ id: i, revenue: 4000000 + i * 20000 });
+  const serve = F.mockSite(population, 40, 20, { repeatPastPage: true });
+
+  const staticData = {};
+  const cfg = Object.assign({}, CONFIG, { maxBands: 5000 });
+  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let guard = 0;
+
+  while (state.hasMore !== false && guard++ < 20000) {
+    const built = run('Build Search URL', { staticData, nodeOutputs: { Config: cfg }, input: state })[0];
+    state = run('Parse Search Results', {
+      staticData,
+      nodeOutputs: { Config: cfg, 'Build Search URL': built },
+      input: httpOk(serve(built.targetUrl)),
+    })[0];
+  }
+
+  eq(state.collected.length, population.length,
+    `all recovered without retuning resultCeiling (got ${state.collected.length})`);
+  eq(staticData.cwGrantRun.observedCap, 40, 'the real cap was detected, not assumed');
+
+  const summary = run('Run Summary', { staticData, nodeOutputs: { Config: cfg }, input: {} })[0];
+  eq(summary.observedCapBelowConfigured, 40, 'reported so resultCeiling can be set correctly');
+});
+
+t('exhausting maxBands loses companies — and must say so, never look clean', () => {
+  // This is what a too-low maxBands does: the crawl stops splitting and quietly
+  // returns a fraction. It reproduces the reported 143-of-many symptom.
+  const population = [];
+  for (let i = 1; i <= 2000; i++) population.push({ id: i, revenue: 4000000 + i * 2000 });
+  const serve = F.mockSite(population, 40, 20, { repeatPastPage: true });
+
+  const staticData = {};
+  const cfg = Object.assign({}, CONFIG, { maxBands: 12 });
+  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let guard = 0;
+
+  while (state.hasMore !== false && guard++ < 20000) {
+    const built = run('Build Search URL', { staticData, nodeOutputs: { Config: cfg }, input: state })[0];
+    state = run('Parse Search Results', {
+      staticData,
+      nodeOutputs: { Config: cfg, 'Build Search URL': built },
+      input: httpOk(serve(built.targetUrl)),
+    })[0];
+  }
+
+  ok(state.collected.length < population.length, 'incomplete, as expected');
+  ok(state.errors.some((e) => e.includes('maxBands')), 'the cause is named in the errors');
+
+  const summary = run('Run Summary', { staticData, nodeOutputs: { Config: cfg }, input: {} })[0];
+  ok(summary.diagnosis.includes('ceiling') || summary.errors.some((e) => e.includes('maxBands')),
+    'Run Summary does not present a truncated crawl as a clean one');
 });
 
 t('without subdivision the same site yields only 60 — the reported symptom', () => {

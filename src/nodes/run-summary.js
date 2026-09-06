@@ -28,7 +28,7 @@ let diagnosis = '';
  * revenue range are unreachable through this search. Say so loudly: the run
  * otherwise looks like a clean success while quietly missing companies.
  */
-const unsplittable = (run.bands || []).filter((b) => b.found >= 60 && !b.split);
+const unsplittable = (run.bands || []).filter((b) => b.truncated && !b.split);
 if (unsplittable.length) {
   diagnosis = unsplittable.length + ' revenue band(s) came back at the site\'s ~60-result ' +
     'ceiling and could not be split further: ' +
@@ -67,6 +67,12 @@ return [{
     bandsSearched: run.bandsSearched || 0,
     bandsSplit: run.bandsSplit || 0,
     bandsAtCeiling: run.bandsAtCeiling || 0,
+    // The largest number of results any single band returned. If bands are
+    // clustering at a number below Config.resultCeiling, that number is the
+    // site's real cap — set resultCeiling to it.
+    maxBandSize: run.maxBandSize || 0,
+    observedCapBelowConfigured: run.observedCap || 0,
+    observedPageSize: run.observedPageSize || 0,
     bands: run.bands || [],
     paginationStopReason: run.paginationStopReason || '',
     profileUrlsFound: run.profileUrlsFound || 0,

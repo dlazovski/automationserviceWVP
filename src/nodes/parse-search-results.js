@@ -45,32 +45,67 @@ function abort(reason, message) {
 }
 
 /**
- * This band is finished. Record it, subdivide it if it came back at the
- * ceiling, then move on to the next band in the queue.
+ * This band is finished. Record it, subdivide it if the site truncated it,
+ * then move on to the next band in the queue.
  */
 function finishBand(reason) {
   const found = bandSeen.length;
   let didSplit = false;
 
   run.bandsSearched = (run.bandsSearched || 0) + 1;
+  run.maxBandSize = Math.max(run.maxBandSize || 0, found);
 
   /*
-   * A band that returns >= the ceiling was almost certainly truncated by the
-   * site, not exhausted — there is no way to tell "exactly 60 matches" from
-   * "60 shown of 400". So treat it as truncated and bisect it: the two halves
-   * partition the band exactly, and each is a narrower search that should fall
-   * under the ceiling. Repeat until every band comes back short.
+   * WAS THIS BAND TRUNCATED BY THE SITE, OR DID WE ACTUALLY EXHAUST IT?
    *
-   * This is the one mechanism that makes the run COMPLETE rather than capped.
+   * Three independent signals say "truncated". Getting this wrong in the
+   * conservative direction is cheap (a couple of extra searches that come back
+   * with the same companies); getting it wrong the other way silently loses
+   * companies, which is what capped an earlier run.
+   *
+   *   1. found >= ceiling — the classic case. There is no way to tell
+   *      "exactly 60 matches" from "60 shown of 400".
+   *
+   *   2. repeated_results AND the count is an exact multiple of the page size.
+   *      The site served a page we had already seen instead of advancing. On
+   *      its own that is NOT proof of truncation — many sites serve page 1
+   *      again for any p past the end, so a band we genuinely exhausted also
+   *      ends this way, and splitting on that alone subdivides forever.
+   *      A cap, though, falls on a page boundary (3 pages x 20 = 60), while a
+   *      natural end almost never does. So the multiple is the discriminator:
+   *      22 results ending in a repeat is a real end; 40 is a cap.
+   *      This is what catches a cap LOWER than the configured `ceiling`.
+   *
+   *   3. max_pages_reached — we stopped, the site did not. No ambiguity.
+   *
+   * Erring toward "truncated" costs a couple of extra searches that return
+   * companies we already have. Erring the other way silently loses them.
    */
-  if (autoSplit && found >= ceiling) {
+  const pageSize = Number(run.observedPageSize) || 20;
+  const hitCeiling = found >= ceiling;
+  // `found > pageSize` (not >=) requires at least two pages: with a single
+  // page the count IS the page size, and a full first page is not evidence of
+  // anything on its own.
+  const cutOnPageBoundary = reason === 'repeated_results' &&
+    found > pageSize && found % pageSize === 0;
+  const weStoppedEarly = reason === 'max_pages_reached';
+  const truncated = found > 0 && (hitCeiling || cutOnPageBoundary || weStoppedEarly);
+
+  if (autoSplit && truncated) {
     run.bandsAtCeiling = (run.bandsAtCeiling || 0) + 1;
+    if (!hitCeiling) {
+      // The real cap is lower than `ceiling`. Record it so Run Summary can
+      // report the number actually observed rather than the assumed one.
+      run.observedCap = Math.max(run.observedCap || 0, found);
+    }
     const halves = splitBand(band.from, band.to);
 
     if (!halves) {
       const msg = '[search] band ' + formatBand(band) + ' returned ' + found +
-        ' results (at the ~' + ceiling + ' ceiling) but is too narrow to split further. ' +
-        'Some companies in this revenue range may be unreachable through this search.';
+        ' results and was truncated by the site (' + reason + '), but is too narrow to ' +
+        'split further. Some companies in this revenue range are unreachable through ' +
+        'this search — narrow Config.searchUrl on another axis (NKD code via at=, or ' +
+        'town via c=) and run once per slice.';
       errors.push(msg);
       run.errors.push(msg);
     } else if (run.bandsSearched + queue.length >= maxBands) {
@@ -92,6 +127,7 @@ function finishBand(reason) {
     found: found,
     pages: state.page,
     stopReason: reason,
+    truncated: truncated,
     split: didSplit,
   });
 
@@ -152,6 +188,9 @@ if (blocking.length) {
 }
 
 run.searchPagesFetched = (run.searchPagesFetched || 0) + 1;
+// The site's own page size, learned rather than assumed — a cap falls on a
+// multiple of it, which is how a cap below `resultCeiling` is recognised.
+run.observedPageSize = Math.max(run.observedPageSize || 0, parsed.rowCount);
 
 /* ---- END-OF-BAND DETECTION  <<< ADJUST HERE IF NEEDED >>> -------------- *
  * Signal 1 (primary): zero /kompanija/ profile links on the page. This is the
