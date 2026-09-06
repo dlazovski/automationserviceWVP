@@ -344,6 +344,36 @@ t('a name falls back to the <title> when there is no <h1>', () => {
   ok(p.notes.includes('name:from-title'));
 });
 
+t('a role we do not harvest terminates the Управител run', () => {
+  // Regression: "Овластено лице" was not a known label, so the Управител run
+  // read through it and captured the label text plus both authorised persons.
+  const p = P.parseProfile(F.profilePage({ contacts: F.CONTACTS_WITH_EXTRA_ROLES }));
+  eq(p.managers, ['АЛЕКСАНДРА ОЛИВЕРА КОРИШИ', 'ВЕСНА СТОЈАНОВИЌ']);
+  ok(!p.managers.some((m) => /Овластено/i.test(m)), 'the label itself must not appear');
+  ok(!p.managers.includes('КАТЕРИНА ДОНЕВА'), 'authorised persons are not Управител');
+  eq(p.owners, ['дм дрогерие маркт ГмбХ (100,00%)']);
+});
+
+t('two year columns merged onto one line are not concatenated', () => {
+  // Regression: "250 255" became 250255 once mkNumber stripped the space.
+  const p = P.parseProfile(F.profilePage({ financial: F.FINANCIAL_MERGED_CELLS }));
+  eq(p.employees, 255, 'the latest year, not the two glued together');
+  eq(p.revenue, 3595905000);
+  eq(p.profit, 168612000);
+  eq(p.revenueYear, 2025);
+});
+
+t('a genuine space-grouped number is not torn apart', () => {
+  // The counts must line up exactly, or the expansion is rejected.
+  const html = F.profilePage({
+    financial: `<section><h2>ФИНАНСИСКО РЕЗИМЕ</h2><div>
+      <div><span>2024</span></div><div><span>2025</span></div>
+      <div><span>Вкупен приход</span><span>1 234 567</span><span>2 345 678</span></div></div></section>`,
+  });
+  const p = P.parseProfile(html);
+  eq(p.revenue, 2345678, 'read as one number per year, not six');
+});
+
 t('contacts rendered only as tel:/mailto: links are still found', () => {
   const p = P.parseProfile(F.profilePage({
     contacts: `<section><h2>КОНТАКТИ</h2>

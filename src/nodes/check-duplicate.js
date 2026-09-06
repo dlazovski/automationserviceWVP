@@ -11,6 +11,7 @@
 // The lookup node has alwaysOutputData enabled, so "no match" arrives as a
 // single empty item rather than as zero items (which would stall the loop).
 
+const cfg = $('Config').first().json;
 const profile = $('Parse Profile').first().json;
 const lookupItems = $input.all().map((i) => i.json || {});
 
@@ -20,12 +21,41 @@ if (!run.errors) run.errors = [];
 
 const embs = String(profile.embs || '').trim();
 
-// If the lookup itself errored (onError: continueRegularOutput), prefer writing
-// the lead over losing it — but say so, so the duplicate risk is visible.
+/*
+ * The lookup runs with onError: continueRegularOutput, so a failure arrives as
+ * data. Two very different kinds of failure land here:
+ *
+ *   CONFIGURATION — "Sheet with name Leads not found", a bad document ID, or a
+ *     permission refusal. These will not fix themselves, and every later
+ *     company hits them identically. Continuing means scraping the whole list
+ *     (minutes of requests, ScrapingBee credits) before the appends make the
+ *     problem visible. So: abort on company #1 with the fix in the message.
+ *
+ *   TRANSIENT — a 429, a 503, a timeout. Continue and write the lead: losing a
+ *     scraped company is worse than risking one duplicate row. The risk is
+ *     logged so it can be checked by hand.
+ */
 const lookupError = lookupItems.find((i) => i && i.error);
 if (lookupError) {
+  const msg = errorMessage(lookupError.error);
+  const isConfigProblem = /not found|does not exist|unable to parse range|permission|forbidden|not have access|invalid.*(id|range)/i.test(msg);
+
+  if (isConfigProblem) {
+    throw new Error(
+      'Google Sheets is not reachable with the current settings, so the run was stopped ' +
+      'before scraping the rest of the list.\n\n' +
+      'Google said: ' + msg + '\n\n' +
+      'Check, in the Config node:\n' +
+      '  - sheetName ("' + (cfg.sheetName || '') + '") must match a real TAB name in the spreadsheet\n' +
+      '  - errorSheetName ("' + (cfg.errorSheetName || '') + '") likewise\n' +
+      '  - googleSheetId must be the ID of a spreadsheet this credential can edit\n\n' +
+      'The most reliable fix is to open the three Google Sheets nodes and pick the ' +
+      'document and tab from the dropdowns rather than relying on the exported values.'
+    );
+  }
+
   run.errors.push('[dedupe] ' + profile.profileUrl +
-    ': the Google Sheets EMBS lookup failed (' + errorMessage(lookupError.error) +
+    ': the Google Sheets EMBS lookup failed (' + msg +
     '). Treated as NOT a duplicate — check this row by hand.');
 }
 

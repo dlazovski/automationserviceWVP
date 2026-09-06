@@ -303,17 +303,37 @@ function valuesUnderLabel(L, labelRe, stopRe, validator, max) {
   return out;
 }
 
-/** Labels that appear inside a person row and are never a person's name. */
+/*
+ * Labels that appear inside a person row and are never a person's name.
+ *
+ * EVERY role label in the КОНТАКТИ block must be listed here, not just the two
+ * we harvest. The block runs "Управител / NAME / Управител / NAME /
+ * Овластено лице / NAME / …", and each label's value run stops at the next
+ * label. A role that is missing from this list is invisible as a boundary, so
+ * the Управител run reads straight through it and captures the label text plus
+ * everyone underneath it. That is exactly how "Овластено лице" and the two
+ * authorised persons ended up in the Managers column.
+ */
+var PERSON_LABELS = [
+  // roles we harvest
+  'сопственик', 'сопственици', 'управител', 'управители',
+  'претставник', 'претставници',
+  // roles we do NOT harvest, but which must still terminate a run
+  'овластено лице', 'овластени лица', 'овластен потписник',
+  'прокурист', 'прокуристи', 'директор', 'извршен директор',
+  'законски застапник', 'застапник', 'ликвидатор', 'стечаен управник',
+  'член', 'членови', 'претседател', 'основач', 'основачи',
+  'содружник', 'содружници', 'акционер', 'акционери',
+  // field labels inside the same block
+  'позиција', 'функција', 'вид', 'сопственички удел', 'удел',
+  'од', 'до', 'име', 'име и презиме',
+  'контакти', 'тел', 'тел.', 'телефон', 'телефони', 'мобилен', 'факс',
+  'е-пошта', 'е пошта', 'емаил', 'мејл', 'e-mail', 'веб', 'www',
+  'адреса', 'седиште', 'дејност'
+];
+
 function isPersonLabel(s) {
-  var n = norm(s);
-  return n === 'сопственик' || n === 'сопственици' ||
-    n === 'управител' || n === 'управители' ||
-    n === 'претставник' || n === 'претставници' ||
-    n === 'позиција' || n === 'функција' || n === 'вид' ||
-    n === 'сопственички удел' || n === 'удел' ||
-    n === 'од' || n === 'до' || n === 'име' || n === 'име и презиме' ||
-    n === 'контакти' || n === 'тел' || n === 'телефон' ||
-    n === 'е-пошта' || n === 'е пошта' || n === 'емаил' || n === 'e-mail';
+  return PERSON_LABELS.indexOf(norm(s)) >= 0;
 }
 
 /**
@@ -747,6 +767,26 @@ function readYearRowFromLines(L, labelRe) {
     for (var f = i + 1; f < Math.min(L.length, i + 1 + 14); f++) {
       if (mkNumber(L[f]) !== null && !isYearToken(L[f])) values.push(L[f]);
       else if (values.length) break;
+    }
+
+    /*
+     * Without a tag boundary between them, two year columns can land on ONE
+     * line ("250 255"). mkNumber() then strips the space and reads that as
+     * 250255 — which is how an employee count of 250 became 250,255.
+     *
+     * So: when the collected values are fewer than the year columns, try
+     * splitting each on whitespace and keep the expansion only if it makes the
+     * counts line up. Requiring the exact match is what keeps a genuine
+     * space-grouped number ("1 234 567") from being torn into three.
+     */
+    if (years.length > 1 && values.length < years.length) {
+      var expanded = [];
+      for (var e = 0; e < values.length; e++) {
+        var toks = String(values[e]).split(/[\s\u00a0]+/)
+          .filter(function (tk) { return /\d/.test(tk) && mkNumber(tk) !== null; });
+        expanded = expanded.concat(toks.length ? toks : [values[e]]);
+      }
+      if (expanded.length === years.length) values = expanded;
     }
     // Inline shape: "Добивка/загуба -1.234 5.678 9.012"
     if (!values.length) {

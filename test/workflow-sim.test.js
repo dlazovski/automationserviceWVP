@@ -460,6 +460,21 @@ t('a numeric EMBS from Sheets still matches the string form', () => {
   eq(run('Check Duplicate', st)[0].__isNew, false, 'still recognised as a duplicate');
 });
 
+t('a misconfigured sheet stops the run on company #1, not after the whole list', () => {
+  const st = dedupeState({ error: { message: 'Sheet with name Leads not found' } });
+  throws(() => run('Check Duplicate', st), /run was stopped/, 'aborts');
+  try { run('Check Duplicate', st); } catch (e) {
+    ok(e.message.includes('Sheet with name Leads not found'), 'quotes what Google said');
+    ok(e.message.includes('sheetName'), 'names the setting to change');
+    ok(e.message.includes('Leads'), 'shows the current value');
+  }
+});
+
+t('a permission failure aborts the same way', () => {
+  const st = dedupeState({ error: { message: 'The caller does not have permission' } });
+  throws(() => run('Check Duplicate', st), /run was stopped/, 'aborts');
+});
+
 t('a failed lookup writes the lead and records the duplicate risk', () => {
   const st = dedupeState({ error: 'The Google Sheets API returned 503' });
   const out = run('Check Duplicate', st)[0];

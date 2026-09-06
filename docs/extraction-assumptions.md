@@ -84,6 +84,22 @@ all match.
 | **(k) Revenue** | row `Вкупен приход`, latest year column | see below | `REVENUE_LABEL_RE` |
 | **(l) Employees** | row `Просечен број на вработени`, latest year column | a labelled line anywhere on the page. **Optional** — blank, never an error | `EMPLOYEES_LABEL_RE` |
 
+### Person labels are a closed list — keep it complete
+
+`PERSON_LABELS` must contain **every** role label the КОНТАКТИ block can show,
+not only the two the workflow harvests. The block runs
+`Управител / NAME / Управител / NAME / Овластено лице / NAME / …`, and each
+label's value run ends at the next *known* label. A role missing from the list
+is invisible as a boundary, so the `Управител` run reads straight through it and
+captures the label text plus everyone underneath it.
+
+That is a confirmed live failure, not a hypothetical: `Овластено лице` was
+absent, and a real row came back as
+`АЛЕКСАНДРА ОЛИВЕРА КОРИШИ; ВЕСНА СТОЈАНОВИЌ; Овластено лице; КАТЕРИНА ДОНЕВА;
+ЕЛЕНА ТРАЈКОВСКА`. **If you see a label name or an unexpected person in the
+Owners or Managers column, add that role to `PERSON_LABELS`** — that is the fix,
+every time.
+
 ### Required vs optional
 
 Only these route a company to the `Errors` tab when absent: **Company Name,
@@ -142,6 +158,17 @@ positional guess, and it is flagged as such.
 rendered by JavaScript: re-run the probe with `--render-js` and set
 `Config.renderJs = "true"`.
 
+### When two year columns land on one line
+
+Without a tag boundary between them, a row's year values can linearise into a
+single line — `250 255` — and `mkNumber()` strips the space and reads `250255`.
+That is how a live employee count of 255 came back as 250,255.
+
+`readYearRowFromLines()` therefore splits each collected value on whitespace
+when there are fewer values than year columns, and keeps the expansion **only if
+the counts then match exactly**. Requiring the exact match is what stops a
+genuinely space-grouped number (`1 234 567`) from being torn into three.
+
 ### Number formats
 
 Macedonian convention — `.` groups thousands, `,` is the decimal separator:
@@ -172,7 +199,7 @@ so it must match row 1 of your sheet character for character.
    working.
 4. `npm run probe` again until clean.
 5. `npm run verify` — rebuilds the workflow JSON, re-runs the structural checks
-   and all 103 tests.
+   and all 108 tests.
 6. Re-import `workflow/companywall-mk-grant-leads.json` into n8n.
 
 Never edit the extraction rules inside the workflow JSON: each of the 9 Code

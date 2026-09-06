@@ -120,6 +120,34 @@ const FINANCIAL_DIVS = `
   </div>
 </section>`;
 
+/*
+ * The КОНТАКТИ shape seen on a real page (ДМ ДРОГЕРИЕ МАРКТ): Управител rows
+ * followed by Овластено лице rows. Only the Управител people are Managers.
+ */
+const CONTACTS_WITH_EXTRA_ROLES = `
+<section class="contacts">
+  <h2>КОНТАКТИ</h2>
+  <div class="row"><span class="label">ТЕЛ</span><span class="value">02/3224-407</span></div>
+  <div class="row"><span class="label">Е-ПОШТА</span><span class="value">vesna.s@dm-drogeriemarkt.rs</span></div>
+  <div class="row"><span class="label">Сопственик</span><span class="value">дм дрогерие маркт ГмбХ (100,00%)</span></div>
+  <div class="row"><span class="label">Управител</span><span class="value">АЛЕКСАНДРА ОЛИВЕРА КОРИШИ</span></div>
+  <div class="row"><span class="label">Управител</span><span class="value">ВЕСНА СТОЈАНОВИЌ</span></div>
+  <div class="row"><span class="label">Овластено лице</span><span class="value">КАТЕРИНА ДОНЕВА</span></div>
+  <div class="row"><span class="label">Овластено лице</span><span class="value">ЕЛЕНА ТРАЈКОВСКА</span></div>
+</section>`;
+
+/* Two year columns landing on one line, with no tag boundary between them. */
+const FINANCIAL_MERGED_CELLS = `
+<section class="financials">
+  <h2>ФИНАНСИСКО РЕЗИМЕ</h2>
+  <div class="grid">
+    <div><span>2024</span></div><div><span>2025</span></div>
+    <div><span>Вкупен приход</span><span>3.100.000.000,00 3.595.905.000,00</span></div>
+    <div><span>Добивка/загуба</span><span>140.000.000,00 168.612.000,00</span></div>
+    <div><span>Просечен број на вработени</span><span>250 255</span></div>
+  </div>
+</section>`;
+
 function profilePage(opts) {
   const o = opts || {};
   const financial = o.financial === undefined ? FINANCIAL_TABLE_ASC : o.financial;
@@ -145,6 +173,8 @@ module.exports = {
   cloudflarePage,
   profilePage,
   CONTACTS_BLOCK,
+  CONTACTS_WITH_EXTRA_ROLES,
+  FINANCIAL_MERGED_CELLS,
   BASIC_INFO_BLOCK,
   FINANCIAL_TABLE_ASC,
   FINANCIAL_TABLE_DESC,

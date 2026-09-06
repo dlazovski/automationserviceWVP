@@ -30,7 +30,7 @@ curl: (56) CONNECT tunnel failed, response 403
 
 Everything else is done and tested: the workflow graph, the pagination loop, the
 per-company ЕМБС dedupe, the rate limiting, the error routing and the Sheets
-mapping are covered by **103 passing tests**. What is *unverified* is whether the
+mapping are covered by **108 passing tests**. What is *unverified* is whether the
 label matching finds the real markup, and whether ScrapingBee needs the premium
 proxy here.
 
@@ -52,7 +52,7 @@ list of assumptions and exactly where to adjust each one.
 ### 1. Step 0 — verify against the live site
 
 ```bash
-npm test                                  # 103 tests, no dependencies to install
+npm test                                  # 108 tests, no dependencies to install
 
 SCRAPINGBEE_API_KEY=xxxxx npm run probe   # 2 real calls, ~10s, 2 credits
 ```
@@ -285,7 +285,8 @@ queue.
 | Profile parses, an **optional** field blank | Blank cell, no Errors row. Optional = Phone Numbers, Emails, Owners, Managers, Number of Employees — real companies routinely list none of these, and you can filter on the empty cells in the sheet. |
 | Nothing at all could be extracted | Row → `Errors` with "nothing could be extracted … run `npm run probe`". Never written to `Leads` as a blank row. |
 | Google Sheets append fails | Retried 3× with backoff, then routed to `Errors` with the real API message, and the run continues. If the whole spreadsheet is unreachable the `Errors` append fails too — `Run Summary.diagnosis` is then the only record, and it names the likely cause. |
-| Google Sheets **lookup** fails | The lead is written anyway (better than losing it) and the duplicate risk is logged to `Run Summary`. |
+| Google Sheets lookup fails — **configuration** (tab not found, bad ID, no permission) | The run **stops on the first company**, with the message quoting what Google said and naming the Config field to change. It will not fix itself, and continuing would burn the whole list's ScrapingBee credits before the appends made it visible. |
+| Google Sheets lookup fails — **transient** (429, 503, timeout) | The lead is written anyway (better than losing it) and the duplicate risk is logged to `Run Summary`. |
 
 The **Run Summary** node reports the totals: pages fetched, why pagination
 stopped, profiles fetched/failed, duplicates skipped, rows written, rows with
@@ -301,7 +302,7 @@ src/nodes/*.js              ← One file per n8n Code node.
 build/build-workflow.js     ← Inlines parsers.js into each Code node, emits the JSON.
 build/validate-workflow.js  ← Structural + policy checks on the generated workflow.
 scripts/step0-probe.js      ← Step 0 live verification.
-test/                       ← 103 tests (parsers + end-to-end node simulation).
+test/                       ← 108 tests (parsers + end-to-end node simulation).
 workflow/                   ← The importable n8n workflow (generated, committed).
 docs/                       ← Every extraction assumption, and where to change it.
 ```
@@ -319,12 +320,12 @@ overwrites them. The loop is: edit `src/parsers.js` → `npm run probe` →
 npm test
 ```
 
-- `test/parsers.test.js` (56) — MKD number formats (`128.450.900,00`, losses,
+- `test/parsers.test.js` (59) — MKD number formats (`128.450.900,00`, losses,
   parenthesised losses), percent-encoded href handling, end-of-pagination
   signals, challenge-vs-empty-page classification, every profile field, the
   descending-year financial table, the no-`<table>` fallback, and the sheet row
   shape.
-- `test/workflow-sim.test.js` (47) — executes the **generated** Code nodes with
+- `test/workflow-sim.test.js` (49) — executes the **generated** Code nodes with
   mocked n8n globals: the real pagination loop (termination, repeat detection,
   403/429, caps), the per-company ЕМБС dedupe, error routing, and a full
   search → profile → dedupe → sheet run.
