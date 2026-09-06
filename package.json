@@ -1,0 +1,18 @@
+{
+  "name": "companywall-mk-grant-leads",
+  "version": "1.0.0",
+  "private": true,
+  "description": "n8n workflow: CompanyWall.mk lead scrape for the automation/digitalisation grant campaign (revenue > 4,000,000 MKD) via ScrapingBee into Google Sheets.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build/build-workflow.js",
+    "probe": "node scripts/step0-probe.js",
+    "test:parsers": "node test/parsers.test.js",
+    "test:workflow": "node build/build-workflow.js >/dev/null && node test/workflow-sim.test.js",
+    "test": "npm run test:parsers && npm run test:workflow",
+    "verify": "npm run build && node build/validate-workflow.js && npm test"
+  },
+  "license": "UNLICENSED"
+}
