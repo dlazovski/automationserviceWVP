@@ -30,7 +30,7 @@ curl: (56) CONNECT tunnel failed, response 403
 
 Everything else is done and tested: the workflow graph, the pagination loop, the
 per-company ЕМБС dedupe, the rate limiting, the error routing and the Sheets
-mapping are covered by **136 passing tests**. What is *unverified* is whether the
+mapping are covered by **137 passing tests**. What is *unverified* is whether the
 label matching finds the real markup, and whether ScrapingBee needs the premium
 proxy here.
 
@@ -52,7 +52,7 @@ list of assumptions and exactly where to adjust each one.
 ### 1. Step 0 — verify against the live site
 
 ```bash
-npm test                                  # 136 tests, no dependencies to install
+npm test                                  # 137 tests, no dependencies to install
 
 SCRAPINGBEE_API_KEY=xxxxx npm run probe   # 2 real calls, ~10s, 2 credits
 ```
@@ -289,10 +289,27 @@ single shared budget would give each of 99 sectors `maxBands/99` splits and
 starve every one of them, which can make a sweep return *fewer* companies than a
 plain revenue crawl.
 
-**Cost.** The sweep is much more expensive: budget several hours and one
-ScrapingBee credit per request. Running it in chunks (`nkdCodes: "01,…,20"`,
-then `"21,…,40"`, …) is usually easier to manage, and runs are additive — dedupe
-is by EMBS against the sheet, so nothing is duplicated.
+**Cost, and surviving a long run.** The sweep is much more expensive: budget
+several hours and one ScrapingBee credit per request. Three things make that
+survivable:
+
+- **The loop item stays small.** The accumulated URL list lives in workflow
+  static data, not in the item that travels the loop. Carried in the item, n8n
+  retained a full copy of a growing list for *every* node execution — thousands
+  of copies of a list thousands long, which is what makes a long sweep run out
+  of memory. A test pins the item size.
+- **`executionTimeout` is set to 24h** and `saveDataSuccessExecution` to
+  `none`, so a low instance default cannot kill the run and n8n is not asked to
+  retain tens of thousands of node executions. Errors are still saved in full,
+  and `Run Summary` is visible live while the run is going.
+- **Interrupted runs resume cheaply.** A Google Sheets lookup on `Profile URL`
+  runs *before* the profile fetch, so a company already in the sheet costs one
+  Sheets read instead of a ScrapingBee credit and a 2-second wait. The `EMBS`
+  check still runs after the fetch, exactly as specified.
+
+**Run it in chunks anyway** — `nkdCodes: "01,…,20"`, then `"21,…,40"`, and so
+on. Each execution stays short, and runs are additive because dedupe is against
+the sheet, so nothing is duplicated and you can stop and resume between chunks.
 
 **Row shaping.** `Build Sheet Row` emits exactly the 14 columns and nothing
 else. That node exists on purpose: with `autoMapInputData`, a key that has no
@@ -300,7 +317,10 @@ matching header is *not* quietly ignored — n8n either adds a column to your
 sheet or fails the append. No control key ever reaches the Sheets node, and the
 validator enforces it.
 
-**Deduplication** happens per company, inside the loop, right before the write:
+**Deduplication** happens twice, both per company and inside the loop. First a
+`Profile URL` lookup *before* the profile is fetched — that is the resume check,
+and it is what stops an interrupted sweep re-spending credits on companies it
+already has. Then the `EMBS` check right before the write:
 the Google Sheets lookup searches the `EMBS` column for this company's ЕМБС. A
 hit skips the company entirely — no duplicate row, and no update to the existing
 row. A miss appends. So normal operation can never produce a duplicate ЕМБС.
@@ -371,7 +391,7 @@ src/nodes/*.js              ← One file per n8n Code node.
 build/build-workflow.js     ← Inlines parsers.js into each Code node, emits the JSON.
 build/validate-workflow.js  ← Structural + policy checks on the generated workflow.
 scripts/step0-probe.js      ← Step 0 live verification.
-test/                       ← 136 tests (parsers + end-to-end node simulation).
+test/                       ← 137 tests (parsers + end-to-end node simulation).
 workflow/                   ← The importable n8n workflow (generated, committed).
 docs/                       ← Every extraction assumption, and where to change it.
 ```
@@ -394,7 +414,7 @@ npm test
   signals, challenge-vs-empty-page classification, every profile field, the
   descending-year financial table, the no-`<table>` fallback, and the sheet row
   shape.
-- `test/workflow-sim.test.js` (71) — executes the **generated** Code nodes with
+- `test/workflow-sim.test.js` (72) — executes the **generated** Code nodes with
   mocked n8n globals: the real pagination loop (termination, repeat detection,
   403/429, caps), the per-company ЕМБС dedupe, error routing, and a full
   search → profile → dedupe → sheet run.

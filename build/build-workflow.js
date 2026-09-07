@@ -254,7 +254,7 @@ function sheetsAppendNode(name, position, sheetNameExpr, notes) {
  * items, and a node with zero input items never executes, which would stall the
  * loop for every new company.
  */
-function sheetsLookupNode(name, position) {
+function sheetsLookupNode(name, position, column, valueExpr, notes) {
   return {
     parameters: {
       operation: 'read',
@@ -270,7 +270,7 @@ function sheetsLookupNode(name, position) {
       },
       filtersUI: {
         values: [
-          { lookupColumn: 'EMBS', lookupValue: '={{ $json.embs }}' },
+          { lookupColumn: column, lookupValue: valueExpr },
         ],
       },
       options: {},
@@ -286,7 +286,7 @@ function sheetsLookupNode(name, position) {
     maxTries: 3,
     waitBetweenTries: 2000,
     credentials: sheetsCredentials(),
-    notes: 'Duplicate check: looks up this company\'s EMBS in the sheet before writing.',
+    notes: notes,
     notesInFlow: true,
   };
 }
@@ -383,16 +383,23 @@ const nodes = [
   splitInBatchesNode('Loop Companies', [1160, 420]),
   ifNode('Has Company?', '={{ $json.hasCompany }}', [1380, 540],
     'Guards the "search found nothing" marker item.'),
-  codeNode('Build Profile Request', 'build-profile-request.js', [1600, 640]),
-  waitNode('Wait Before Profile', [1820, 640], WAIT_SECONDS),
-  scrapingBeeNode('ScrapingBee: Profile', [2040, 640],
+  sheetsLookupNode('Google Sheets: Lookup Profile URL', [1600, 640], 'Profile URL',
+    '={{ $json.profileUrl }}',
+    'Resume check: skips companies already scraped, BEFORE spending a ScrapingBee credit.'),
+  ifNode('Already Scraped?', "={{ $json['Profile URL'] == $('Loop Companies').first().json.profileUrl }}",
+    [1820, 640],
+    'true = already in the sheet from an earlier run -> skip without fetching.'),
+  codeNode('Build Profile Request', 'build-profile-request.js', [2040, 760]),
+  waitNode('Wait Before Profile', [2260, 760], WAIT_SECONDS),
+  scrapingBeeNode('ScrapingBee: Profile', [2480, 760],
     'GET the public /kompanija/ profile page (Резиме tab).'),
-  codeNode('Parse Profile', 'parse-profile.js', [2260, 640]),
-  ifNode('Profile OK?', '={{ $json.ok }}', [2480, 640],
+  codeNode('Parse Profile', 'parse-profile.js', [2700, 760]),
+  ifNode('Profile OK?', '={{ $json.ok }}', [2920, 760],
     'false = fetch failed / blocked / no EMBS -> Errors tab, run continues.'),
 
   /* --- dedupe + write --------------------------------------------- */
-  sheetsLookupNode('Google Sheets: Lookup EMBS', [2700, 540]),
+  sheetsLookupNode('Google Sheets: Lookup EMBS', [3140, 660], 'EMBS', '={{ $json.embs }}',
+    'Duplicate check: looks up this company\'s EMBS in the sheet before writing.'),
   codeNode('Check Duplicate', 'check-duplicate.js', [2920, 540]),
   ifNode('Is New?', '={{ $json.__isNew }}', [3140, 540],
     'false = this EMBS is already in the sheet -> skip the company entirely.'),
@@ -556,12 +563,22 @@ const connections = {
 
   'Has Company?': {
     main: [
-      [{ node: 'Build Profile Request', type: 'main', index: 0 }],
+      [{ node: 'Google Sheets: Lookup Profile URL', type: 'main', index: 0 }],
       // "search found nothing" marker: consume it and let the loop finish.
       [{ node: 'Loop Companies', type: 'main', index: 0 }],
     ],
   },
 
+  'Google Sheets: Lookup Profile URL': {
+    main: [[{ node: 'Already Scraped?', type: 'main', index: 0 }]],
+  },
+  'Already Scraped?': {
+    main: [
+      // Already in the sheet: skip WITHOUT fetching the profile page.
+      [{ node: 'Loop Companies', type: 'main', index: 0 }],
+      [{ node: 'Build Profile Request', type: 'main', index: 0 }],
+    ],
+  },
   'Build Profile Request': { main: [[{ node: 'Wait Before Profile', type: 'main', index: 0 }]] },
   'Wait Before Profile': { main: [[{ node: 'ScrapingBee: Profile', type: 'main', index: 0 }]] },
   'ScrapingBee: Profile': { main: [[{ node: 'Parse Profile', type: 'main', index: 0 }]] },
@@ -610,7 +627,20 @@ const workflow = {
     executionOrder: 'v1',
     saveManualExecutions: true,
     saveDataErrorExecution: 'all',
-    saveDataSuccessExecution: 'all',
+    /*
+     * A full NKD sweep is tens of thousands of node executions. Retaining the
+     * input and output of every one of them is what makes a long run die
+     * partway through, and none of it is useful afterwards — "Run Summary" is
+     * visible live while the run is going, and every row is already in the
+     * sheet. Errors are still saved in full.
+     */
+    saveDataSuccessExecution: 'none',
+    /*
+     * Explicit, so a low instance-wide default cannot kill a multi-hour sweep.
+     * n8n clamps this to EXECUTIONS_TIMEOUT_MAX if that is set lower, so it is
+     * safe to ask for more than the instance allows.
+     */
+    executionTimeout: 86400,
   },
   tags: [],
   meta: { instanceId: '' },

@@ -32,7 +32,7 @@ return [{
     page: page,
     bandSeen: Array.isArray(state.bandSeen) ? state.bandSeen : [],
     targetUrl: targetUrl,
-    collected: Array.isArray(state.collected) ? state.collected : [],
+    // `collected` is deliberately NOT carried here — see Init Run.
     errors: Array.isArray(state.errors) ? state.errors : [],
     renderJs: String(cfg.renderJs) === 'true' ? 'true' : 'false',
     premiumProxy: String(cfg.premiumProxy) === 'true' ? 'true' : 'false',

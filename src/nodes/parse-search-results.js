@@ -22,16 +22,18 @@ const maxBands = Number(cfg.maxBands) > 0 ? Number(cfg.maxBands) : 200;
 const ceiling = Number(cfg.resultCeiling) > 0 ? Number(cfg.resultCeiling) : 60;
 const autoSplit = String(cfg.autoSplitOnCeiling) !== 'false';
 
-const band = state.band;
-const queue = Array.isArray(state.queue) ? state.queue.slice() : [];
-const collected = Array.isArray(state.collected) ? state.collected.slice() : [];
-const bandSeen = Array.isArray(state.bandSeen) ? state.bandSeen.slice() : [];
-const errors = Array.isArray(state.errors) ? state.errors.slice() : [];
-
 const staticData = $getWorkflowStaticData('global');
 const run = staticData.cwGrantRun || (staticData.cwGrantRun = { errors: [], bands: [] });
 if (!run.errors) run.errors = [];
 if (!run.bands) run.bands = [];
+
+const band = state.band;
+const queue = Array.isArray(state.queue) ? state.queue.slice() : [];
+// Held in static data rather than in the loop item; mutated in place, because
+// copying it per iteration is what exhausted memory on a long sweep.
+const collected = Array.isArray(run.collected) ? run.collected : (run.collected = []);
+const bandSeen = Array.isArray(state.bandSeen) ? state.bandSeen.slice() : [];
+const errors = Array.isArray(state.errors) ? state.errors.slice() : [];
 
 /** Abandon the whole crawl: the site is refusing us, not merely out of results. */
 function abort(reason, message) {
@@ -39,8 +41,7 @@ function abort(reason, message) {
   run.errors.push(message);
   run.paginationStopReason = reason;
   return [{
-    json: { band: band, queue: queue, page: state.page, bandSeen: bandSeen,
-      collected: collected, errors: errors, hasMore: false, stopReason: reason },
+    json: { band: band, queue: queue, page: state.page, bandSeen: bandSeen, errors: errors, hasMore: false, stopReason: reason },
   }];
 }
 
@@ -153,14 +154,12 @@ function finishBand(reason) {
   if (!next) {
     run.paginationStopReason = reason;
     return [{
-      json: { band: null, queue: [], page: state.page, bandSeen: [],
-        collected: collected, errors: errors, hasMore: false, stopReason: reason },
+      json: { band: null, queue: [], page: state.page, bandSeen: [], errors: errors, hasMore: false, stopReason: reason },
     }];
   }
 
   return [{
-    json: { band: next, queue: queue, page: 1, bandSeen: [],
-      collected: collected, errors: errors, hasMore: true, stopReason: '' },
+    json: { band: next, queue: queue, page: 1, bandSeen: [], errors: errors, hasMore: true, stopReason: '' },
   }];
 }
 
@@ -255,8 +254,7 @@ if (maxCompanies > 0 && collected.length >= maxCompanies) {
   run.profileUrlsFound = collected.length;
   run.paginationStopReason = 'max_companies_reached';
   return [{
-    json: { band: null, queue: [], page: state.page, bandSeen: [],
-      collected: collected, errors: errors, hasMore: false, stopReason: 'max_companies_reached' },
+    json: { band: null, queue: [], page: state.page, bandSeen: [], errors: errors, hasMore: false, stopReason: 'max_companies_reached' },
   }];
 }
 
@@ -274,7 +272,6 @@ return [{
     queue: queue,
     page: state.page + 1,
     bandSeen: bandSeen,
-    collected: collected,
     errors: errors,
     hasMore: true,
     stopReason: '',

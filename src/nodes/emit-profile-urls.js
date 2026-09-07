@@ -9,10 +9,12 @@
 // because a node with zero input items never executes.
 
 const state = $input.first().json;
-const urls = Array.isArray(state.collected) ? state.collected : [];
 
 const staticData = $getWorkflowStaticData('global');
 const run = staticData.cwGrantRun || (staticData.cwGrantRun = { errors: [] });
+
+// Accumulated in static data by "Parse Search Results" — see Init Run for why.
+const urls = Array.isArray(run.collected) ? run.collected : [];
 run.profileUrlsFound = urls.length;
 if (!run.paginationStopReason) run.paginationStopReason = state.stopReason || '';
 

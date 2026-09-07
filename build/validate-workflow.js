@@ -291,9 +291,47 @@ check(!profitFilter, `"${profitFilter && profitFilter.name}" compares profit aga
 /* ---- Google Sheets nodes ---- */
 
 const sheetNodes = wf.nodes.filter((n) => n.type === 'n8n-nodes-base.googleSheets');
-check(sheetNodes.length === 3, `expected 3 Google Sheets nodes (lookup + 2 appends), found ${sheetNodes.length}`);
+check(sheetNodes.length === 4,
+  `expected 4 Google Sheets nodes (2 lookups + 2 appends), found ${sheetNodes.length}`);
+
+/*
+ * The resume check must sit BEFORE the profile fetch, or an interrupted sweep
+ * re-spends a ScrapingBee credit on every company it already has.
+ */
+const resumeOuts = (wf.connections['Has Company?'].main[0] || []).map((l) => l.node);
+check(resumeOuts.includes('Google Sheets: Lookup Profile URL'),
+  'Has Company? must feed the Profile URL resume lookup before anything is fetched');
+const scrapedOuts = wf.connections['Already Scraped?'].main;
+check(scrapedOuts[0][0].node === 'Loop Companies',
+  'Already Scraped? true must skip the company without fetching');
+check(scrapedOuts[1][0].node === 'Build Profile Request',
+  'Already Scraped? false must go on to fetch the profile');
+
+const resumeLookup = byName.get('Google Sheets: Lookup Profile URL');
+if (resumeLookup) {
+  const f = ((resumeLookup.parameters.filtersUI || {}).values || [])[0] || {};
+  check(f.lookupColumn === 'Profile URL', 'the resume lookup must filter on the Profile URL column');
+  check(resumeLookup.alwaysOutputData === true,
+    'the resume lookup needs alwaysOutputData, or an unseen company stalls the loop');
+}
+
+// A long sweep must not be killed by a low default timeout, and must not retain
+// every node execution's data.
+check(wf.settings.executionTimeout >= 3600,
+  'executionTimeout must be generous — a full NKD sweep runs for hours');
+check(wf.settings.saveDataSuccessExecution === 'none',
+  'success execution data must not be retained; it is what exhausts memory on a long sweep');
+
+// The loop item must stay small: the accumulated URL list belongs in static data.
+for (const n of ['Build Search URL', 'Parse Search Results']) {
+  const src = byName.get(n).parameters.jsCode;
+  check(!/\n\s*collected: collected,/.test(src),
+    `"${n}" must not carry the accumulated URL list in the loop item`);
+}
 
 const lookup = byName.get('Google Sheets: Lookup EMBS');
+check(lookup && ((lookup.parameters.filtersUI || {}).values || [])[0].lookupColumn === 'EMBS',
+  'the EMBS duplicate check must still run after the profile fetch');
 check(!!lookup, 'the EMBS duplicate-lookup node is missing');
 if (lookup) {
   check(lookup.parameters.operation === 'read', 'the lookup node must use the read operation');

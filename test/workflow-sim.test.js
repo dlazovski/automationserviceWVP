@@ -114,7 +114,8 @@ t('Init Run seeds page 1 and resets the counters', () => {
   st.staticData.cwGrantRun = { rowsWritten: 999, errors: ['stale'] };  // survives between runs
   const out = run('Init Run', st);
   eq(out[0].page, 1);
-  eq(out[0].collected, []);
+  eq(st.staticData.cwGrantRun.collected, [], 'the URL list starts empty, in static data');
+  ok(!('collected' in out[0]), 'and is NOT carried in the loop item');
   eq(st.staticData.cwGrantRun.rowsWritten, 0, 'stale totals cleared');
   eq(st.staticData.cwGrantRun.errors, [], 'stale errors cleared');
 });
@@ -182,10 +183,10 @@ t('Build Search URL leaves page 1 unpaginated and appends &p= after that', () =>
   eq(run('Build Search URL', st)[0].targetUrl, P.DEFAULT_SEARCH_URL,
     'the seed band reproduces the configured URL exactly');
 
-  st.input = { band: SEED_BAND, page: 4, collected: ['a'], errors: [] };
+  st.input = { band: SEED_BAND, page: 4, errors: [] };
   const out = run('Build Search URL', st)[0];
   eq(out.targetUrl, P.DEFAULT_SEARCH_URL + '&p=4');
-  eq(out.collected, ['a'], 'accumulated URLs carried forward');
+  ok(!('collected' in out), 'the growing URL list is never copied into the loop item');
 });
 
 t('a narrowed band rewrites ONLY the two revenue parameters', () => {
@@ -221,37 +222,44 @@ const SEED = { from: 4000000, to: 4000000000 };
 
 function searchState(over, resp) {
   const st = newState({ input: resp });
-  st.nodeOutputs['Build Search URL'] = Object.assign(
-    { band: SEED, queue: [], page: 1, bandSeen: [], collected: [], errors: [] },
-    over || {}
-  );
-  st.staticData.cwGrantRun = { errors: [], bands: [] };
+  const o = Object.assign({ band: SEED, queue: [], page: 1, bandSeen: [], errors: [] }, over || {});
+  // The accumulated URL list lives in static data, not in the loop item.
+  const collected = o.collected || [];
+  delete o.collected;
+  st.nodeOutputs['Build Search URL'] = o;
+  st.staticData.cwGrantRun = { errors: [], bands: [], collected: collected.slice() };
   return st;
 }
+/** What the crawl has gathered so far, wherever it is actually stored. */
+const gathered = (st) => st.staticData.cwGrantRun.collected;
 
 t('a full page asks for the next one within the same band', () => {
-  const out = run('Parse Search Results', searchState({}, httpOk(F.searchPage(20))))[0];
+  const st = searchState({}, httpOk(F.searchPage(20)));
+  const out = run('Parse Search Results', st)[0];
   eq(out.hasMore, true, 'wants another page');
   eq(out.page, 2, 'advances the page counter');
   eq(out.band, SEED, 'still the same band');
-  eq(out.collected.length, 20);
+  eq(gathered(st).length, 20);
 });
 
 t('pagination accumulates across pages without duplicating', () => {
-  const p1 = run('Parse Search Results', searchState({}, httpOk(F.searchPage(20, 1))))[0];
-  const p2 = run('Parse Search Results',
-    searchState({ page: 2, collected: p1.collected, bandSeen: p1.bandSeen }, httpOk(F.searchPage(20, 21))))[0];
-  eq(p2.collected.length, 40, 'two full pages accumulated');
-  eq(new Set(p2.collected).size, 40, 'all distinct');
+  const s1 = searchState({}, httpOk(F.searchPage(20, 1)));
+  const p1 = run('Parse Search Results', s1)[0];
+  const s2 = searchState({ page: 2, collected: gathered(s1), bandSeen: p1.bandSeen },
+    httpOk(F.searchPage(20, 21)));
+  const p2 = run('Parse Search Results', s2)[0];
+  eq(gathered(s2).length, 40, 'two full pages accumulated');
+  eq(new Set(gathered(s2)).size, 40, 'all distinct');
   eq(p2.hasMore, true);
 });
 
 t('an empty page ends the band; with an empty queue the crawl finishes', () => {
-  const out = run('Parse Search Results',
-    searchState({ page: 3, collected: ['u1', 'u2'], bandSeen: ['u1', 'u2'] }, httpOk(F.emptySearchPage)))[0];
+  const st = searchState({ page: 3, collected: ['u1', 'u2'], bandSeen: ['u1', 'u2'] },
+    httpOk(F.emptySearchPage));
+  const out = run('Parse Search Results', st)[0];
   eq(out.hasMore, false, 'nothing left to fetch');
   eq(out.stopReason, 'no_results_marker');
-  eq(out.collected, ['u1', 'u2'], 'already-collected URLs are kept');
+  eq(gathered(st), ['u1', 'u2'], 'already-collected URLs are kept');
   eq(out.errors, [], 'a normal end of results is not an error');
 });
 
@@ -265,8 +273,9 @@ t('an empty page with no "no results" wording still ends the band', () => {
 t('a repeat on a NON page boundary is a real end, not a truncation', () => {
   // 10 results, page size 20: the site ran out mid-page. Splitting here would
   // subdivide forever on any site that serves page 1 again past the end.
-  const first = run('Parse Search Results', searchState({}, httpOk(F.searchPage(10))))[0];
-  const st = searchState({ page: 2, collected: first.collected, bandSeen: first.bandSeen },
+  const s1 = searchState({}, httpOk(F.searchPage(10)));
+  const first = run('Parse Search Results', s1)[0];
+  const st = searchState({ page: 2, collected: gathered(s1), bandSeen: first.bandSeen },
     httpOk(F.searchPage(10)));
   const out = run('Parse Search Results', st)[0];
   eq(out.hasMore, false, 'accepted as complete');
@@ -284,11 +293,12 @@ t('a repeat ON a page boundary is a cap below the configured ceiling', () => {
    */
   // 40 results at a page size of 20, then a repeat: a cap on a page boundary,
   // well under the configured ceiling of 60.
-  const p1 = run('Parse Search Results', searchState({}, httpOk(F.searchPage(20, 1))))[0];
-  const p2 = run('Parse Search Results',
-    searchState({ page: 2, collected: p1.collected, bandSeen: p1.bandSeen },
-      httpOk(F.searchPage(20, 21))))[0];
-  const st = searchState({ page: 3, collected: p2.collected, bandSeen: p2.bandSeen },
+  const s1 = searchState({}, httpOk(F.searchPage(20, 1)));
+  const p1 = run('Parse Search Results', s1)[0];
+  const s2 = searchState({ page: 2, collected: gathered(s1), bandSeen: p1.bandSeen },
+    httpOk(F.searchPage(20, 21)));
+  const p2 = run('Parse Search Results', s2)[0];
+  const st = searchState({ page: 3, collected: gathered(s2), bandSeen: p2.bandSeen },
     httpOk(F.searchPage(20, 1)));
   const out = run('Parse Search Results', st)[0];
   eq(out.hasMore, true, 'the band is retried as two narrower ones');
@@ -297,8 +307,9 @@ t('a repeat ON a page boundary is a cap below the configured ceiling', () => {
 });
 
 t('an EMPTY page below the ceiling really is exhaustion — no split', () => {
-  const first = run('Parse Search Results', searchState({}, httpOk(F.searchPage(10))))[0];
-  const st = searchState({ page: 2, collected: first.collected, bandSeen: first.bandSeen },
+  const s1 = searchState({}, httpOk(F.searchPage(10)));
+  const first = run('Parse Search Results', s1)[0];
+  const st = searchState({ page: 2, collected: gathered(s1), bandSeen: first.bandSeen },
     httpOk(F.emptySearchPage));
   const out = run('Parse Search Results', st)[0];
   eq(out.hasMore, false, 'accepted as complete');
@@ -317,13 +328,13 @@ t('repeat detection is band-scoped, not global', () => {
 });
 
 t('a 429 aborts the whole crawl, logs it, and never retries', () => {
-  const out = run('Parse Search Results',
-    searchState({ page: 2, collected: ['u1'], bandSeen: ['u1'] }, httpErr(429)))[0];
+  const st = searchState({ page: 2, collected: ['u1'], bandSeen: ['u1'] }, httpErr(429));
+  const out = run('Parse Search Results', st)[0];
   eq(out.hasMore, false);
   eq(out.stopReason, 'http_429');
   ok(out.errors[0].includes('429'), 'logged');
   ok(out.errors[0].includes('premiumProxy'), 'suggests the premium proxy');
-  eq(out.collected, ['u1'], 'URLs gathered before the block are kept');
+  eq(gathered(st), ['u1'], 'URLs gathered before the block are kept');
 });
 
 t('a challenge page is a failure, NOT end-of-results', () => {
@@ -355,7 +366,7 @@ t('maxCompanies truncates the whole crawl', () => {
   const st = searchState({}, httpOk(F.searchPage(20)));
   st.nodeOutputs.Config = Object.assign({}, CONFIG, { maxCompanies: 5 });
   const out = run('Parse Search Results', st)[0];
-  eq(out.collected.length, 5);
+  eq(gathered(st).length, 5);
   eq(out.hasMore, false);
   eq(out.stopReason, 'max_companies_reached');
 });
@@ -391,7 +402,7 @@ t('the next queued band restarts pagination at page 1', () => {
   eq(out.band, { from: 21, to: 30 }, 'moved to the queued band');
   eq(out.page, 1, 'pagination restarts');
   eq(out.bandSeen, [], 'band-scoped repeat detection resets');
-  eq(out.collected, ['u1'], 'the global list carries over');
+  eq(gathered(st), ['u1'], 'the global list carries over');
 });
 
 t('a truncated band that cannot be split is reported, not swallowed', () => {
@@ -442,12 +453,37 @@ t('the subdivision budget is per sector, not shared across the sweep', () => {
   eq(out.errors, [], 'and is not blamed for other sectors\' usage');
 });
 
+t('the loop item stays small no matter how many companies are gathered', () => {
+  /*
+   * The regression this pins: `collected` used to travel inside the loop item,
+   * so n8n retained a full copy of a growing list for EVERY node execution.
+   * On a 99-sector sweep that is thousands of copies of a list thousands long,
+   * and it is what makes a long run die partway through.
+   */
+  const st = searchState({ collected: manyUrls(5000) }, httpOk(F.searchPage(20)));
+  const out = run('Parse Search Results', st)[0];
+
+  eq(gathered(st).length, 5020, 'the list still grows — in static data');
+  ok(!('collected' in out), 'but never rides along in the item');
+
+  const itemBytes = JSON.stringify(out).length;
+  ok(itemBytes < 4000, `loop item must stay small, was ${itemBytes} bytes`);
+
+  // Same assertion for the other node in the loop.
+  const built = run('Build Search URL', {
+    staticData: st.staticData, nodeOutputs: { Config: CONFIG }, input: out,
+  })[0];
+  ok(!('collected' in built), 'Build Search URL must not reintroduce it');
+  ok(JSON.stringify(built).length < 4000, 'and must stay small too');
+});
+
 /* ------------------------------------------------------------------ *
  * Emit Profile URLs
  * ------------------------------------------------------------------ */
 
 t('Emit Profile URLs fans out one item per company', () => {
-  const st = newState({ input: { collected: ['u1', 'u2', 'u3'], stopReason: 'no_results_empty' } });
+  const st = newState({ input: { stopReason: 'no_results_empty' } });
+  st.staticData.cwGrantRun = { errors: [], collected: ['u1', 'u2', 'u3'] };
   const out = run('Emit Profile URLs', st);
   eq(out.length, 3);
   eq(out.map((o) => o.profileUrl), ['u1', 'u2', 'u3']);
@@ -455,7 +491,8 @@ t('Emit Profile URLs fans out one item per company', () => {
 });
 
 t('an empty run still emits one marker item so the loop cannot stall', () => {
-  const st = newState({ input: { collected: [], stopReason: 'no_results_empty' } });
+  const st = newState({ input: { stopReason: 'no_results_empty' } });
+  st.staticData.cwGrantRun = { errors: [], collected: [] };
   const out = run('Emit Profile URLs', st);
   eq(out.length, 1, 'exactly one item');
   eq(out[0].hasCompany, false, 'flagged as the empty marker');
@@ -795,7 +832,7 @@ t('a whole run writes each company once and never writes a duplicate', () => {
 
   // --- pass 1: two full pages then an empty one
   const pages = [F.searchPage(3, 1), F.searchPage(3, 4), F.emptySearchPage];
-  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let state = run('Init Run', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
   let guard = 0;
 
   while (guard++ < 10) {
@@ -811,7 +848,7 @@ t('a whole run writes each company once and never writes a duplicate', () => {
     state = run('Parse Search Results', st)[0];
     if (!state.hasMore) break;
   }
-  eq(state.collected.length, 6, 'six companies across two pages');
+  eq(staticData.cwGrantRun.collected.length, 6, 'six companies across two pages');
   eq(state.stopReason, 'no_results_marker', 'stopped on the empty page');
 
   // --- pass 2: one profile per company, plus a deliberate repeat
@@ -898,7 +935,7 @@ t('the crawl recovers the FULL list from a site that caps every search at 60', (
   const serve = F.mockSite(population, 60, 20);
 
   const staticData = {};
-  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let state = run('Init Run', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
   let requests = 0;
 
   while (state.hasMore !== false && requests < 4000) {
@@ -913,9 +950,9 @@ t('the crawl recovers the FULL list from a site that caps every search at 60', (
     })[0];
   }
 
-  eq(state.collected.length, population.length,
-    `every company found (got ${state.collected.length} of ${population.length})`);
-  eq(new Set(state.collected).size, population.length, 'and each exactly once');
+  eq(staticData.cwGrantRun.collected.length, population.length,
+    `every company found (got ${staticData.cwGrantRun.collected.length} of ${population.length})`);
+  eq(new Set(staticData.cwGrantRun.collected).size, population.length, 'and each exactly once');
   ok(staticData.cwGrantRun.bandsSplit > 0, 'the ceiling was detected and bands were split');
   eq(state.errors, [], 'no band was left stuck at the ceiling');
 
@@ -937,7 +974,7 @@ t('the crawl self-corrects when the site truncates BELOW the configured ceiling'
 
   const staticData = {};
   const cfg = Object.assign({}, CONFIG, { maxBands: 5000 });
-  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let state = run('Init Run', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
   let guard = 0;
 
   while (state.hasMore !== false && guard++ < 20000) {
@@ -949,8 +986,8 @@ t('the crawl self-corrects when the site truncates BELOW the configured ceiling'
     })[0];
   }
 
-  eq(state.collected.length, population.length,
-    `all recovered without retuning resultCeiling (got ${state.collected.length})`);
+  eq(staticData.cwGrantRun.collected.length, population.length,
+    `all recovered without retuning resultCeiling (got ${staticData.cwGrantRun.collected.length})`);
   eq(staticData.cwGrantRun.observedCap, 40, 'the real cap was detected, not assumed');
 
   const summary = run('Run Summary', { staticData, nodeOutputs: { Config: cfg }, input: {} })[0];
@@ -966,7 +1003,7 @@ t('exhausting maxBands loses companies — and must say so, never look clean', (
 
   const staticData = {};
   const cfg = Object.assign({}, CONFIG, { maxBands: 12 });
-  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let state = run('Init Run', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
   let guard = 0;
 
   while (state.hasMore !== false && guard++ < 20000) {
@@ -978,7 +1015,7 @@ t('exhausting maxBands loses companies — and must say so, never look clean', (
     })[0];
   }
 
-  ok(state.collected.length < population.length, 'incomplete, as expected');
+  ok(staticData.cwGrantRun.collected.length < population.length, 'incomplete, as expected');
   ok(state.errors.some((e) => e.includes('maxBands')), 'the cause is named in the errors');
 
   const summary = run('Run Summary', { staticData, nodeOutputs: { Config: cfg }, input: {} })[0];
@@ -993,7 +1030,7 @@ t('without subdivision the same site yields only 60 — the reported symptom', (
 
   const staticData = {};
   const cfg = Object.assign({}, CONFIG, { autoSplitOnCeiling: 'false' });
-  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let state = run('Init Run', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
   let guard = 0;
 
   while (state.hasMore !== false && guard++ < 100) {
@@ -1004,7 +1041,7 @@ t('without subdivision the same site yields only 60 — the reported symptom', (
       input: httpOk(serve(built.targetUrl)),
     })[0];
   }
-  eq(state.collected.length, 60, 'reproduces the capped run exactly');
+  eq(staticData.cwGrantRun.collected.length, 60, 'reproduces the capped run exactly');
 });
 
 t('a dense band nobody can split is surfaced in the Run Summary', () => {
@@ -1015,7 +1052,7 @@ t('a dense band nobody can split is surfaced in the Run Summary', () => {
   const serve = F.mockSite(population, 60, 20);
 
   const staticData = {};
-  let state = { band: SEED_BAND, queue: [], page: 1, bandSeen: [], collected: [], errors: [] };
+  let state = run('Init Run', { staticData, nodeOutputs: { Config: CONFIG }, input: {} })[0];
   let guard = 0;
 
   while (state.hasMore !== false && guard++ < 3000) {

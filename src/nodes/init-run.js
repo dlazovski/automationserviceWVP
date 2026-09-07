@@ -85,6 +85,14 @@ staticData.cwGrantRun = {
   paginationStopReason: '',
   bands: [],
   errors: [],
+  /*
+   * The accumulated profile URLs live HERE, not in the item that travels the
+   * loop. Carrying a growing array through every iteration meant n8n retained
+   * a full copy of it for every node execution — thousands of copies of a list
+   * that reaches thousands of entries. That is what makes a long sweep run out
+   * of memory. One copy in static data costs the same as one iteration used to.
+   */
+  collected: [],
 };
 
 /*
@@ -100,7 +108,6 @@ return [{
     queue: starting.slice(1),
     page: 1,
     bandSeen: [],
-    collected: [],
     errors: [],
   },
 }];
