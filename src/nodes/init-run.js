@@ -26,6 +26,29 @@ if (String(cfg.googleSheetId || '').indexOf('REPLACE_WITH') === 0) {
  * filter is preserved exactly: every request still carries
  * dsm[0].From >= 4000000.
  */
+/*
+ * The NKD (industry) axis.
+ *
+ * Revenue bisection alone has a floor: once a band cannot be narrowed further,
+ * the site's ~60-result cap still bites, and a single revenue sweep tops out
+ * well short of the full population. NKD is a second, INDEPENDENT axis and a
+ * natural partition — each company has one primary activity — so slicing by it
+ * shrinks the per-search result count directly instead of fighting the cap.
+ * Each (NKD sector x revenue band) search is then far below the ceiling.
+ *
+ * An empty list keeps whatever `at=` is already in searchUrl, i.e. the previous
+ * single-sweep behaviour.
+ */
+let nkdCodes = cfg.nkdCodes;
+if (typeof nkdCodes === 'string') {
+  nkdCodes = nkdCodes.trim().toLowerCase() === 'all'
+    ? allNkdSectors()
+    : nkdCodes.split(',');
+}
+if (!Array.isArray(nkdCodes)) nkdCodes = nkdCodes ? [nkdCodes] : [];
+nkdCodes = nkdCodes.map((c) => String(c).trim()).filter((c) => c.length > 0);
+if (nkdCodes.length === 0) nkdCodes = [readNkd(searchUrl)];
+
 const seed = readRevenueBand(searchUrl);
 if (!seed) {
   throw new Error(
@@ -44,6 +67,8 @@ staticData.cwGrantRun = {
   startedAt: new Date().toISOString(),
   searchUrl: searchUrl,
   seedBand: formatBand(seed),
+  nkdCodes: nkdCodes,
+  nkdCodeCount: nkdCodes.length,
   searchPagesFetched: 0,
   bandsSearched: 0,
   bandsSplit: 0,
@@ -62,10 +87,17 @@ staticData.cwGrantRun = {
   errors: [],
 };
 
+/*
+ * One starting band per NKD code. They are worked in order; whenever one is
+ * truncated it is bisected and its halves are pushed to the FRONT, so a dense
+ * sector is broken all the way down while it is still in hand.
+ */
+const starting = nkdCodes.map((nkd) => ({ nkd: nkd, from: seed.from, to: seed.to }));
+
 return [{
   json: {
-    band: seed,
-    queue: [],
+    band: starting[0],
+    queue: starting.slice(1),
     page: 1,
     bandSeen: [],
     collected: [],

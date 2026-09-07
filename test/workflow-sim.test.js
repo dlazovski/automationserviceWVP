@@ -132,6 +132,46 @@ t('Init Run refuses a searchUrl that is not the CompanyWall search page', () => 
 });
 
 /* ------------------------------------------------------------------ *
+ * The NKD (industry) sweep — the second slicing axis
+ * ------------------------------------------------------------------ */
+
+t('Init Run seeds one starting band per NKD sector', () => {
+  const st = newState();
+  st.nodeOutputs.Config = Object.assign({}, CONFIG, { nkdCodes: 'all' });
+  const out = run('Init Run', st)[0];
+  eq(out.queue.length + 1, 99, 'all 99 sectors queued');
+  eq(out.band.nkd, '01', 'starts at the first sector');
+  eq(out.band.from, 4000000, 'each sector spans the full campaign revenue range');
+  eq(out.band.to, 4000000000);
+});
+
+t('a comma-separated list is accepted', () => {
+  const st = newState();
+  st.nodeOutputs.Config = Object.assign({}, CONFIG, { nkdCodes: '46, 47 ,62' });
+  const out = run('Init Run', st)[0];
+  eq([out.band].concat(out.queue).map((b) => b.nkd), ['46', '47', '62']);
+});
+
+t('an empty list keeps the URL as-is — the previous single-sweep behaviour', () => {
+  const st = newState();
+  st.nodeOutputs.Config = Object.assign({}, CONFIG, { nkdCodes: '' });
+  const out = run('Init Run', st)[0];
+  eq(out.queue.length, 0, 'exactly one starting band');
+  eq(out.band.nkd, '', 'no industry filter');
+});
+
+t('Build Search URL applies the sector, the band and the page together', () => {
+  const st = newState({
+    input: { band: { nkd: '46', from: 4000000, to: 9000000 }, page: 3, collected: [], errors: [] },
+  });
+  const url = run('Build Search URL', st)[0].targetUrl;
+  ok(/[?&]at=46(&|$)/.test(url), 'sector applied');
+  ok(url.includes('dsm[0].From=4000000') && url.includes('dsm[0].To=9000000'), 'band applied');
+  ok(url.endsWith('&p=3'), 'page applied');
+  ok(url.includes('sbjact=t'), 'nothing else disturbed');
+});
+
+/* ------------------------------------------------------------------ *
  * Build Search URL
  * ------------------------------------------------------------------ */
 
@@ -377,6 +417,29 @@ t('maxBands stops runaway subdivision and says why', () => {
   st.nodeOutputs.Config = Object.assign({}, CONFIG, { maxBands: 1 });
   const out = run('Parse Search Results', st)[0];
   ok(out.errors[0].includes('maxBands'), `error: ${out.errors[0]}`);
+});
+
+t('a split keeps both halves inside the same sector', () => {
+  const st = searchState({ band: { nkd: '46', from: 4000000, to: 4000000000 }, page: 4,
+    bandSeen: manyUrls(60) }, httpOk(F.emptySearchPage));
+  const out = run('Parse Search Results', st)[0];
+  eq(out.band.nkd, '46', 'first half stays in sector 46');
+  eq(out.queue[0].nkd, '46', 'and so does the second');
+});
+
+t('the subdivision budget is per sector, not shared across the sweep', () => {
+  /*
+   * With a shared budget a 99-sector sweep gives each sector maxBands/99
+   * splits and starves every one of them — which is how a sweep can return
+   * FEWER companies than a single revenue crawl.
+   */
+  const st = searchState({ band: { nkd: '46', from: 4000000, to: 4000000000 }, page: 4,
+    bandSeen: manyUrls(60) }, httpOk(F.emptySearchPage));
+  st.staticData.cwGrantRun.bandsPerNkd = { '47': 500, '62': 500 };  // other sectors busy
+  st.nodeOutputs.Config = Object.assign({}, CONFIG, { maxBands: 100 });
+  const out = run('Parse Search Results', st)[0];
+  eq(st.staticData.cwGrantRun.bandsSplit, 1, 'sector 46 still has its own budget');
+  eq(out.errors, [], 'and is not blamed for other sectors\' usage');
 });
 
 /* ------------------------------------------------------------------ *

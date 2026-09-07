@@ -55,6 +55,13 @@ function finishBand(reason) {
   run.bandsSearched = (run.bandsSearched || 0) + 1;
   run.maxBandSize = Math.max(run.maxBandSize || 0, found);
 
+  // Subdivision budget is spent per NKD code, so one dense sector cannot
+  // exhaust the allowance for the other 98.
+  const nkdKey = band.nkd || '(none)';
+  if (!run.bandsPerNkd) run.bandsPerNkd = {};
+  run.bandsPerNkd[nkdKey] = (run.bandsPerNkd[nkdKey] || 0) + 1;
+  const bandsUsedHere = run.bandsPerNkd[nkdKey];
+
   /*
    * WAS THIS BAND TRUNCATED BY THE SITE, OR DID WE ACTUALLY EXHAUST IT?
    *
@@ -108,15 +115,25 @@ function finishBand(reason) {
         'town via c=) and run once per slice.';
       errors.push(msg);
       run.errors.push(msg);
-    } else if (run.bandsSearched + queue.length >= maxBands) {
-      const msg = '[search] band ' + formatBand(band) + ' is at the ceiling but Config.maxBands=' +
-        maxBands + ' was reached. Raise maxBands to keep subdividing.';
+    } else if (bandsUsedHere + queue.length >= maxBands) {
+      /*
+       * The budget is PER NKD CODE, not per run. With the industry sweep on,
+       * a run covers up to 99 sectors; a single shared budget would give each
+       * sector maxBands/99 splits and starve every one of them — which is
+       * exactly how a sweep can come back with fewer companies than it should.
+       */
+      const msg = '[search] ' + formatBand(band) + ' is truncated but Config.maxBands=' +
+        maxBands + ' was reached for this NKD code. Raise maxBands to keep subdividing.';
       errors.push(msg);
       run.errors.push(msg);
     } else {
       // Depth-first: work the halves before anything queued earlier, so a dense
       // range is broken all the way down while it is still in hand.
-      queue.unshift(halves[0], halves[1]);
+      // Both halves stay in the same NKD sector.
+      queue.unshift(
+        { nkd: band.nkd, from: halves[0].from, to: halves[0].to },
+        { nkd: band.nkd, from: halves[1].from, to: halves[1].to }
+      );
       run.bandsSplit = (run.bandsSplit || 0) + 1;
       didSplit = true;
     }
@@ -124,6 +141,7 @@ function finishBand(reason) {
 
   run.bands.push({
     band: formatBand(band),
+    nkd: band.nkd || '',
     found: found,
     pages: state.page,
     stopReason: reason,

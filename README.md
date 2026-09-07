@@ -30,7 +30,7 @@ curl: (56) CONNECT tunnel failed, response 403
 
 Everything else is done and tested: the workflow graph, the pagination loop, the
 per-company ЕМБС dedupe, the rate limiting, the error routing and the Sheets
-mapping are covered by **124 passing tests**. What is *unverified* is whether the
+mapping are covered by **136 passing tests**. What is *unverified* is whether the
 label matching finds the real markup, and whether ScrapingBee needs the premium
 proxy here.
 
@@ -52,7 +52,7 @@ list of assumptions and exactly where to adjust each one.
 ### 1. Step 0 — verify against the live site
 
 ```bash
-npm test                                  # 124 tests, no dependencies to install
+npm test                                  # 136 tests, no dependencies to install
 
 SCRAPINGBEE_API_KEY=xxxxx npm run probe   # 2 real calls, ~10s, 2 credits
 ```
@@ -157,6 +157,7 @@ Open the **Config** node:
 |---|---|---|
 | `searchUrl` | the campaign URL from the brief | Carries `dsm[0].From=4000000` (revenue > 4M MKD). Pagination only appends `&p=N` — the filter itself is never rebuilt. |
 | `googleSheetId` | `REPLACE_WITH_GOOGLE_SHEET_ID` | **Set this.** |
+| `nkdCodes` | `"all"` | The **industry sweep** — the second slicing axis. `"all"` = every 2-digit NKD sector (01–99); a list like `"46,47,62"` = just those; `""` = no industry filter, i.e. one revenue sweep (the old behaviour). |
 | `sheetName` | `Leads` | Main tab. |
 | `errorSheetName` | `Errors` | Failure-log tab. |
 | `maxPages` | `50` | Safety cap on pagination, **per band**. |
@@ -266,6 +267,33 @@ flagging them would send nearly every company down the error branch and bury the
 real problems. They show up as empty cells in `Leads`, which is where you would
 filter on them anyway.
 
+**Two slicing axes, not one.** Revenue bisection alone has a floor: once a band
+cannot be narrowed further, the ~60 cap still bites, and a single revenue sweep
+tops out well short of the full population. The campaign URL ships with `at=`
+**empty** — no industry filter — so every search competes for the same 60-slot
+budget.
+
+NKD is a second, independent axis and a natural partition (each company has one
+primary activity), so it shrinks the per-search result count directly instead of
+fighting the cap. It is the same parameter the sister CompanyWall workflow is
+built around, and it accepts 2-digit sectors. Measured on the simulator, with a
+revenue filter coarse enough to stall bisection:
+
+| Sweep | Companies found |
+|---|---|
+| Revenue only | 655 of 2410 (27%) |
+| NKD × revenue | **2287 of 2410 (95%)** |
+
+The subdivision budget (`maxBands`) is spent **per NKD code**, not per run — a
+single shared budget would give each of 99 sectors `maxBands/99` splits and
+starve every one of them, which can make a sweep return *fewer* companies than a
+plain revenue crawl.
+
+**Cost.** The sweep is much more expensive: budget several hours and one
+ScrapingBee credit per request. Running it in chunks (`nkdCodes: "01,…,20"`,
+then `"21,…,40"`, …) is usually easier to manage, and runs are additive — dedupe
+is by EMBS against the sheet, so nothing is duplicated.
+
 **Row shaping.** `Build Sheet Row` emits exactly the 14 columns and nothing
 else. That node exists on purpose: with `autoMapInputData`, a key that has no
 matching header is *not* quietly ignored — n8n either adds a column to your
@@ -343,7 +371,7 @@ src/nodes/*.js              ← One file per n8n Code node.
 build/build-workflow.js     ← Inlines parsers.js into each Code node, emits the JSON.
 build/validate-workflow.js  ← Structural + policy checks on the generated workflow.
 scripts/step0-probe.js      ← Step 0 live verification.
-test/                       ← 124 tests (parsers + end-to-end node simulation).
+test/                       ← 136 tests (parsers + end-to-end node simulation).
 workflow/                   ← The importable n8n workflow (generated, committed).
 docs/                       ← Every extraction assumption, and where to change it.
 ```
@@ -361,12 +389,12 @@ overwrites them. The loop is: edit `src/parsers.js` → `npm run probe` →
 npm test
 ```
 
-- `test/parsers.test.js` (59) — MKD number formats (`128.450.900,00`, losses,
+- `test/parsers.test.js` (65) — MKD number formats (`128.450.900,00`, losses,
   parenthesised losses), percent-encoded href handling, end-of-pagination
   signals, challenge-vs-empty-page classification, every profile field, the
   descending-year financial table, the no-`<table>` fallback, and the sheet row
   shape.
-- `test/workflow-sim.test.js` (65) — executes the **generated** Code nodes with
+- `test/workflow-sim.test.js` (71) — executes the **generated** Code nodes with
   mocked n8n globals: the real pagination loop (termination, repeat detection,
   403/429, caps), the per-company ЕМБС dedupe, error routing, and a full
   search → profile → dedupe → sheet run.

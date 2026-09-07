@@ -6,7 +6,8 @@
 //   2. "More Pages?" (true branch)   -> the next page, or the next band
 //
 // Two things happen to the configured URL and nothing else:
-//   - dsm[0].From / dsm[0].To are set to the current band, and
+//   - at= is set to the current NKD sector (when the sweep is enabled),
+//   - dsm[0].From / dsm[0].To are set to the current revenue band, and
 //   - "&p=N" is appended for pages after the first.
 //
 // Every other parameter — the NKD groups, bly, sbjact, the literal bracket
@@ -19,7 +20,9 @@ const page = Number(state.page) || 1;
 const band = state.band;
 if (!band) throw new Error('Build Search URL reached with no revenue band in state.');
 
-const bandUrl = withRevenueBand(cfg.searchUrl, band.from, band.to);
+// Three rewrites, in order, and nothing else: industry, revenue band, page.
+const nkdUrl = withNkd(cfg.searchUrl, band.nkd === undefined ? readNkd(cfg.searchUrl) : band.nkd);
+const bandUrl = withRevenueBand(nkdUrl, band.from, band.to);
 const targetUrl = buildSearchUrl(bandUrl, page);
 
 return [{

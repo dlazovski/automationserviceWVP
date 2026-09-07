@@ -62,9 +62,39 @@ same set the single search asked for, and every request still carries
 functionally, and a test drives the whole crawl against a mock site that
 enforces the cap: 470 of 470 recovered, versus 60 with subdivision off.
 
-**If a band still cannot get under the ceiling** (60+ companies on an identical
-revenue figure), narrow `Config.searchUrl` on another axis — NKD code via `at=`,
-or town via `c=`, as the sister workflow does — and run once per slice.
+### The second axis: NKD (`at=`)
+
+Revenue bisection has a floor. Once a band cannot be narrowed further — 60+
+companies on an identical revenue figure, or a revenue filter whose granularity
+is coarser than the band — the cap still bites, and the crawl tops out.
+
+`Config.nkdCodes` sweeps the **industry** axis to get past that:
+
+| Value | Behaviour |
+|---|---|
+| `"all"` | every 2-digit sector, `01`–`99` (the default) |
+| `"46,47,62"` | just those sectors |
+| `""` | keep whatever `at=` is in `searchUrl` — one revenue sweep, the old behaviour |
+
+Each `(sector × revenue band)` search is far below the ceiling, so the cap stops
+being the binding constraint. `withNkd()` rewrites only the `at=` value; the
+`[?&]` anchor matters, because `sbjact=t` also contains `act=` and an unanchored
+`/at=/` would corrupt it. A test asserts that.
+
+Two properties worth keeping in mind if you change this:
+
+- **The budget is per sector.** `maxBands` is spent per NKD code, not per run.
+  Shared, a 99-sector sweep gives each sector `maxBands/99` splits and starves
+  all of them — a sweep can then return *fewer* companies than a plain revenue
+  crawl.
+- **Sectors are assumed to partition the population.** If a company's primary
+  activity is not one of the 99 two-digit sectors it will not appear in the
+  sweep. Runs are additive, so keeping the results of a plain `nkdCodes: ""`
+  run alongside the sweep covers that gap.
+
+**If a sector still cannot get under the ceiling**, narrow `Config.searchUrl` on
+a third axis — town via `c=`, region via `r=`, or headcount via `dsm[1]`, as the
+sister workflow does — and run once per slice.
 
 ### End of a band
 
@@ -228,7 +258,7 @@ so it must match row 1 of your sheet character for character.
    working.
 4. `npm run probe` again until clean.
 5. `npm run verify` — rebuilds the workflow JSON, re-runs the structural checks
-   and all 124 tests.
+   and all 136 tests.
 6. Re-import `workflow/companywall-mk-grant-leads.json` into n8n.
 
 Never edit the extraction rules inside the workflow JSON: each of the 9 Code

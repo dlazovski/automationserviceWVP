@@ -74,6 +74,7 @@ return [{
     observedCapBelowConfigured: run.observedCap || 0,
     observedPageSize: run.observedPageSize || 0,
     bands: run.bands || [],
+    bandsPerNkd: run.bandsPerNkd || {},
     paginationStopReason: run.paginationStopReason || '',
     profileUrlsFound: run.profileUrlsFound || 0,
     profilesFetched: run.profilesFetched || 0,

@@ -330,6 +330,13 @@ const nodes = [
             type: 'string',
           },
           { id: 'cfg-sheet-id', name: 'googleSheetId', value: SHEET_ID_PLACEHOLDER, type: 'string' },
+          /*
+           * The NKD (industry) sweep — the second slicing axis.
+           * ""    = keep whatever at= is in searchUrl (one revenue sweep).
+           * "all" = every 2-digit sector, 01-99.
+           * or a comma-separated list: "46,47,62".
+           */
+          { id: 'cfg-nkd', name: 'nkdCodes', value: 'all', type: 'string' },
           { id: 'cfg-sheet-name', name: 'sheetName', value: 'Leads', type: 'string' },
           { id: 'cfg-error-sheet', name: 'errorSheetName', value: 'Errors', type: 'string' },
           { id: 'cfg-max-pages', name: 'maxPages', value: 50, type: 'number' },

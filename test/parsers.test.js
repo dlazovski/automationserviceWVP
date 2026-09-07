@@ -132,6 +132,42 @@ t('an existing &p= is replaced, never duplicated', () => {
   ok(u.endsWith('&p=4'), 'ends with the new page');
 });
 
+t('withNkd sets at= and touches nothing else', () => {
+  const u = P.withNkd(P.DEFAULT_SEARCH_URL, '47');
+  ok(/[?&]at=47(&|$)/.test(u), 'at= is set');
+  const mask = (x) => x.replace(/[?&]at=[^&]*/, 'AT');
+  eq(mask(u), mask(P.DEFAULT_SEARCH_URL), 'every other parameter byte-identical');
+});
+
+t('withNkd does not corrupt sbjact, which also contains "act="', () => {
+  // An unanchored /at=/ would rewrite the middle of "sbjact=t".
+  ok(P.withNkd(P.DEFAULT_SEARCH_URL, '62').includes('sbjact=t'));
+});
+
+t('withNkd clears the filter when given an empty code', () => {
+  const set = P.withNkd(P.DEFAULT_SEARCH_URL, '47');
+  eq(P.withNkd(set, ''), P.DEFAULT_SEARCH_URL, 'round-trips back to no filter');
+});
+
+t('readNkd reads the campaign URL as having NO industry filter', () => {
+  eq(P.readNkd(P.DEFAULT_SEARCH_URL), '', 'which is why one sweep competes for one 60-slot budget');
+});
+
+t('the NKD and revenue rewrites compose without interfering', () => {
+  const u = P.withRevenueBand(P.withNkd(P.DEFAULT_SEARCH_URL, '46'), 4000000, 9000000);
+  ok(/[?&]at=46(&|$)/.test(u));
+  ok(u.includes('dsm[0].From=4000000') && u.includes('dsm[0].To=9000000'));
+  ok(u.includes('sbjact=t') && u.includes('bly=2025'));
+});
+
+t('allNkdSectors covers 01-99 with two digits throughout', () => {
+  const s2 = P.allNkdSectors();
+  eq(s2.length, 99);
+  eq(s2[0], '01');
+  eq(s2[98], '99');
+  ok(s2.every((c) => /^\d{2}$/.test(c)), 'always two digits');
+});
+
 /* ------------------------------------------------------------------ *
  * Search results — profile links only
  * ------------------------------------------------------------------ */

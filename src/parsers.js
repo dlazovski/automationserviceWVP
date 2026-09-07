@@ -520,6 +520,47 @@ function withRevenueBand(url, from, to) {
  * denari, so a width of 1 cannot be halved. The caller reports that as a band
  * it could not get under the ceiling.
  */
+/**
+ * The same URL with ONLY the `at=` (NKD / industry) value replaced.
+ *
+ * The campaign URL ships with `at=` EMPTY, i.e. no industry filter — so every
+ * search competes for the same ~60-result budget no matter how the revenue
+ * range is sliced. Revenue bisection alone therefore has a floor: once a band
+ * cannot be narrowed further, the cap still bites.
+ *
+ * NKD is a second, independent axis and a natural partition (each company has
+ * one primary activity), so it shrinks the per-search result count directly
+ * rather than fighting the cap. The sister CompanyWall workflow is built around
+ * exactly this parameter, and confirms it accepts 2-digit sectors ("47") as
+ * well as full codes ("47.19").
+ *
+ * The `[?&]` anchor matters: "sbjact=t" also contains "act=", and an unanchored
+ * /at=/ would corrupt it.
+ */
+function withNkd(url, code) {
+  var u = String(url || '');
+  var v = code === null || code === undefined ? '' : String(code).trim();
+  if (!/[?&]at=/.test(u)) return u;
+  return u.replace(/([?&]at=)[^&]*/, '$1' + encodeURIComponent(v));
+}
+
+/** The `at=` value currently in a search URL. */
+function readNkd(url) {
+  var m = String(url || '').match(/[?&]at=([^&]*)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+/**
+ * Every 2-digit NKD/NACE sector. The list has no gaps by design: requesting a
+ * sector that does not exist simply returns nothing, which costs one cheap
+ * search and keeps coverage obviously complete rather than subtly curated.
+ */
+function allNkdSectors() {
+  var out = [];
+  for (var i = 1; i <= 99; i++) out.push(i < 10 ? '0' + i : String(i));
+  return out;
+}
+
 function splitBand(from, to) {
   var f = Math.round(from);
   var t = Math.round(to);
@@ -532,7 +573,9 @@ function splitBand(from, to) {
 }
 
 function formatBand(band) {
-  return band ? band.from + '-' + band.to : '(none)';
+  if (!band) return '(none)';
+  var range = band.from + '-' + band.to;
+  return band.nkd ? 'NKD ' + band.nkd + ' ' + range : range;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1248,6 +1291,9 @@ if (typeof module !== 'undefined' && module.exports) {
     readRevenueBand: readRevenueBand,
     withRevenueBand: withRevenueBand,
     splitBand: splitBand,
+    withNkd: withNkd,
+    readNkd: readNkd,
+    allNkdSectors: allNkdSectors,
     formatBand: formatBand,
     diagnoseResponse: diagnoseResponse,
     isBlockingFlag: isBlockingFlag,

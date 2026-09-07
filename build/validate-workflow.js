@@ -206,8 +206,10 @@ check(!/[?&]p=\d/.test(searchUrl), 'Config.searchUrl must not carry a &p= page p
  * filter from parts.
  */
 const urlBuilder = byName.get('Build Search URL');
-check(urlBuilder && urlBuilder.parameters.jsCode.includes('withRevenueBand(cfg.searchUrl, band.from, band.to)'),
-  'Build Search URL must derive its URL from Config.searchUrl via withRevenueBand');
+check(urlBuilder && urlBuilder.parameters.jsCode.includes('withNkd(cfg.searchUrl,'),
+  'Build Search URL must derive its URL from Config.searchUrl via withNkd');
+check(urlBuilder && urlBuilder.parameters.jsCode.includes('withRevenueBand(nkdUrl, band.from, band.to)'),
+  'Build Search URL must apply the revenue band on top of the NKD rewrite');
 check(urlBuilder && urlBuilder.parameters.jsCode.includes('buildSearchUrl(bandUrl, page)'),
   'Build Search URL must append pagination via buildSearchUrl');
 
@@ -247,10 +249,25 @@ check(initRun && /readRevenueBand\(searchUrl\)/.test(initRun.parameters.jsCode),
     if (!bands.length) break;
   }
 
-  // And the rewrite must touch nothing but the two revenue parameters.
-  const mask = (u) => u.replace(/dsm\[0\]\.(From|To)=\d+/g, 'X');
-  check(mask(P.withRevenueBand(searchUrl, 123, 456)) === mask(searchUrl),
+  // And the rewrites must touch nothing but their own parameters.
+  const maskBand = (u) => u.replace(/dsm\[0\]\.(From|To)=\d+/g, 'X');
+  check(maskBand(P.withRevenueBand(searchUrl, 123, 456)) === maskBand(searchUrl),
     'withRevenueBand must leave every other query parameter byte-identical');
+
+  const maskNkd = (u) => u.replace(/[?&]at=[^&]*/, 'AT');
+  check(maskNkd(P.withNkd(searchUrl, '47')) === maskNkd(searchUrl),
+    'withNkd must leave every other query parameter byte-identical');
+  // "sbjact=t" also contains "act=" — an unanchored /at=/ would corrupt it.
+  check(P.withNkd(searchUrl, '47').includes('sbjact=t'),
+    'withNkd must not corrupt the sbjact parameter');
+  check(/[?&]at=47(&|$)/.test(P.withNkd(searchUrl, '47')),
+    'withNkd must actually set the at= value');
+
+  // The two rewrites must compose without interfering.
+  const both = P.withRevenueBand(P.withNkd(searchUrl, '62'), 4000000, 9000000);
+  check(/[?&]at=62(&|$)/.test(both) && both.includes('dsm[0].From=4000000') &&
+    both.includes('dsm[0].To=9000000') && both.includes('sbjact=t'),
+    'withNkd and withRevenueBand must compose cleanly');
 }
 
 /* ---- no profit/loss filtering anywhere ---- */
